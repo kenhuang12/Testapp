@@ -215,16 +215,28 @@ function fireCells(clear){
 }
 function popRuns(runs){
   combo++;
-  const clear=new Map(); const powered=[];
+  // merge intersecting same-color runs so L/T shapes count by total cells
+  const groups=[];
   for(const run of runs){
-    const lenB=run.len>=5?2.6:run.len===4?1.8:1;
-    let keep=null;
-    if(run.len>=4){
-      keep=run.cells.find(([r,c])=>pendSwapCell&&r===pendSwapCell.r&&c===pendSwapCell.c)
-        || run.cells[Math.floor(run.cells.length/2)];
-      powered.push({r:keep[0],c:keep[1],pw:run.len>=5?'a5':'a4',cn:run.cn});
-    }
+    let g=groups.find(gr=>gr.cn===run.cn&&run.cells.some(([r,c])=>gr.set.has(key(r,c))));
+    if(!g){ g={cn:run.cn,set:new Set(),cells:[],inter:null}; groups.push(g); }
     for(const [r,c] of run.cells){
+      if(g.set.has(key(r,c))) g.inter=[r,c];
+      else { g.set.add(key(r,c)); g.cells.push([r,c]); }
+    }
+  }
+  const clear=new Map(); const powered=[];
+  for(const g of groups){
+    const total=g.cells.length;
+    const lenB=total>=5?2.6:total===4?1.8:1;
+    let keep=null;
+    if(total>=4){
+      keep=g.inter
+        || g.cells.find(([r,c])=>pendSwapCell&&r===pendSwapCell.r&&c===pendSwapCell.c)
+        || g.cells[Math.floor(g.cells.length/2)];
+      powered.push({r:keep[0],c:keep[1],pw:total>=5?'a5':'a4',cn:g.cn});
+    }
+    for(const [r,c] of g.cells){
       if(keep&&r===keep[0]&&c===keep[1]) continue;
       if(!clear.has(key(r,c))||clear.get(key(r,c))<lenB) clear.set(key(r,c),lenB);
     }
@@ -312,7 +324,7 @@ function frontMon(){
 function spawnWave(){
   wave++;
   const boss=wave%5===0;
-  const n=boss?2:Math.min(6, 2+Math.ceil(wave/2));
+  const n=boss?2:Math.min(5, 1+Math.ceil(wave/2));
   const y0=fieldTop+44;
   const list=[];
   if(boss) list.push({boss:true});
@@ -320,11 +332,11 @@ function spawnWave(){
   const cnt=list.length;
   list.forEach((e,i)=>{
     const x=W*((i+1)/(cnt+1));
-    const hpv=e.boss?110+wave*35:12+wave*7;
+    const hpv=e.boss?90+wave*26:9+wave*5;
     mons.push({x, y:-50, ty:y0+(i%2)*30+(e.boss?10:0), r:(e.boss?0.8:0.38)*cell,
       hp:hpv,maxhp:hpv, boss:e.boss, arrived:false,
-      atkMax:e.boss?6:Math.max(2.4,5.2-0.15*wave), atkT:0,
-      dmg:e.boss?18+2*wave:Math.round(4+wave*1.1),
+      atkMax:e.boss?7.5:Math.max(3.2,6.5-0.14*wave), atkT:0,
+      dmg:e.boss?14+1.5*wave:Math.round(3+wave*0.8),
       slow:0, stun:0, poison:null, ph:Math.random()*7, dead:false, lunge:0});
     mons[mons.length-1].atkT=mons[mons.length-1].atkMax*rnd(0.8,1.3);
   });
@@ -450,7 +462,7 @@ function endGame(){
 
 // ---------- update ----------
 function update(dt){
-  if(xp>=xpNeed){ xp-=xpNeed; level++; xpNeed=Math.round(xpNeed*1.35); offerCards(); }
+  if(xp>=xpNeed){ xp-=xpNeed; level++; xpNeed=Math.round(xpNeed*1.28); offerCards(); }
   leech.t=Math.max(0,leech.t-dt);
 
   if(busy){
@@ -509,7 +521,7 @@ function update(dt){
   if(!alive&&state==='play'){
     waveDelay-=dt;
     if(waveDelay<=0){
-      if(wave>0){ score+=50*wave; hp=Math.min(100,hp+5); float(W/2,H/2-40,'WAVE CLEAR  +'+(50*wave),'#5ce8a4',20); }
+      if(wave>0){ score+=50*wave; hp=Math.min(100,hp+12); float(W/2,H/2-40,'WAVE CLEAR  +'+(50*wave),'#5ce8a4',20); }
       spawnWave(); waveDelay=1.4;
     }
   } else waveDelay=1.4;
