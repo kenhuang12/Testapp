@@ -117,7 +117,8 @@ const mult=l=>1+0.45*(l-1);
 
 // ---------- state ----------
 let state='title';
-let balls=[], mons=[], gems=[], parts=[], floats=[], zaps=[];
+let balls=[], mons=[], gems=[], parts=[], floats=[], zaps=[], pins=[];
+let placing=null;
 let score=0,best=0,hp=100,wave=1,xp=0,xpNeed=20,tGame=0,tReal=0;
 let rowT=1.2,lastBossWave=0,rotIdx=0,fireT=0.4;
 let aimA=-Math.PI/2, aiming=false;
@@ -161,13 +162,13 @@ function fireBall(){
   for(let i=0;i<count;i++){
     const off=(i-(count-1)/2)*0.10;
     balls.push({x:W/2, y:playerY-16, vx:Math.cos(aimA+off)*sp, vy:Math.sin(aimA+off)*sp,
-      key:slot.key, r:(d.big?11:7)*U, life:4.6, cd:0, dead:false,
+      key:slot.key, r:(d.big?11:7)*U, life:4.6, cd:0, pinCd:0, heat:0, isSplit:false, dead:false,
       trail:[]});
   }
   sFire();
 }
 function ballDmg(b){ const slot=owned.find(s=>s.key===b.key), d=defs[b.key];
-  return d.base*mult(slot?slot.lvl:1)*(1+0.25*surge); }
+  return d.base*mult(slot?slot.lvl:1)*(1+0.25*surge)*(1+0.22*Math.min(6,b.heat||0)); }
 
 // ---------- monsters ----------
 function spawnRow(){
@@ -230,6 +231,14 @@ addEventListener('pointerdown',e=>{
   initAudio();
   if(state==='title'){ startGame(); return; }
   if(state==='over'){ if(tReal-overAt>0.6) startGame(); return; }
+  if(placing&&state==='play'&&e.isPrimary){
+    const x=Math.max(24,Math.min(W-24,e.clientX));
+    const y=Math.max(94,Math.min(lineY-60,e.clientY));
+    pins.push({x,y,kind:placing,ph:Math.random()*7});
+    puff(x,y,10,placing==='bump'?'#ff8ab0':'#7fe8d0',140);
+    beep(330,0.1,'square',0.5,120);
+    placing=null; paused=false; return;
+  }
   if(paused||!e.isPrimary) return;
   aiming=true; setAim(e.clientX,e.clientY);
 });
@@ -253,6 +262,8 @@ function offerCards(){
   if(rateUp<4) opts.push({t:'rate'});
   if(surge<4) opts.push({t:'surge'});
   if(hp<70) opts.push({t:'heal'});
+  if(pins.filter(p=>p.kind==='bump').length<5) opts.push({t:'bump'});
+  if(pins.filter(p=>p.kind==='split').length<3) opts.push({t:'split'});
   const fuses=opts.filter(o=>o.t==='fuse'), rest=opts.filter(o=>o.t!=='fuse');
   for(let i=rest.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[rest[i],rest[j]]=[rest[j],rest[i]];}
   const picks=(fuses.length?[fuses[Math.floor(Math.random()*fuses.length)]]:[]).concat(rest).slice(0,3);
@@ -275,6 +286,10 @@ function offerCards(){
     if(o.t==='rate'){ nm='RAPID'; ds='Fire 15% faster.'; }
     if(o.t==='surge'){ nm='SURGE'; ds='All damage +25%.'; }
     if(o.t==='heal'){ nm='MEND'; ds='Restore 35 health.'; btn.style.borderLeftColor='#ff4d6d'; }
+    if(o.t==='bump'){ nm='BUMPER'; ds='Build your pit: place a bumper anywhere. Balls ricochet off it faster and hotter — each bounce stacks +22% damage.';
+      btn.style.borderLeftColor='#ff8ab0'; }
+    if(o.t==='split'){ nm='SPLITTER'; ds='Build your pit: place a splitter peg. Balls that strike it split in two.';
+      btn.style.borderLeftColor='#7fe8d0'; }
     btn.innerHTML='<div class="cname">'+nm+'</div><div class="cdesc">'+ds+'</div>';
     btn.onclick=()=>{ applyCard(o); $lv.classList.add('hidden'); paused=false; };
     $cards.appendChild(btn);
@@ -287,6 +302,8 @@ function applyCard(o){
   if(o.t==='rate') rateUp++;
   if(o.t==='surge') surge++;
   if(o.t==='heal') hp=Math.min(100,hp+35);
+  if(o.t==='bump'||o.t==='split'){ placing=o.t; paused=true;
+    float(W/2,H/2,'TAP THE PIT TO PLACE','#efe6d8',20); }
   if(o.t==='fuse'){
     const f=o.f, nk=f.name.toLowerCase();
     defs[nk]=f;
@@ -301,7 +318,7 @@ function applyCard(o){
 // ---------- flow ----------
 function startGame(){
   defs={iron:TYPES.iron}; owned=[{key:'iron',lvl:1}]; rateUp=0; surge=0;
-  balls=[];mons=[];gems=[];parts=[];floats=[];zaps=[];
+  balls=[];mons=[];gems=[];parts=[];floats=[];zaps=[];pins=[];placing=null;
   score=0;hp=100;wave=1;xp=0;xpNeed=20;tGame=0;rowT=0.5;lastBossWave=0;rotIdx=0;fireT=0.3;
   aimA=-Math.PI/2;shake=0;hurtFlash=0;paused=false;gemChain=0;
   state='play'; $t.classList.add('hidden'); $o.classList.add('hidden'); $lv.classList.add('hidden');
@@ -331,14 +348,39 @@ function update(dt){
   gemChainT-=dt; if(gemChainT<=0) gemChain=0;
 
   // balls
+  const newSplits=[];
   for(const b of balls){
-    b.cd-=dt; b.life-=dt;
+    b.cd-=dt; b.life-=dt; b.pinCd-=dt;
     b.trail.unshift([b.x,b.y]); if(b.trail.length>6)b.trail.pop();
     b.x+=b.vx*dt; b.y+=b.vy*dt;
     if(b.x<b.r){ b.x=b.r; b.vx=Math.abs(b.vx); }
     if(b.x>W-b.r){ b.x=W-b.r; b.vx=-Math.abs(b.vx); }
     if(b.y<b.r+4){ b.y=b.r+4; b.vy=Math.abs(b.vy); }
     if(b.y>H+20||b.life<=0){ b.dead=true; continue; }
+    if(b.pinCd<=0) for(const pin of pins){
+      const pr=(pin.kind==='bump'?12:9)*U;
+      const dx=b.x-pin.x, dy=b.y-pin.y, d=Math.hypot(dx,dy);
+      if(d<b.r+pr){
+        const nx=dx/(d||1), ny=dy/(d||1);
+        b.x=pin.x+nx*(pr+b.r+1); b.y=pin.y+ny*(pr+b.r+1);
+        const dot=b.vx*nx+b.vy*ny;
+        if(dot<0){ b.vx-=2*dot*nx; b.vy-=2*dot*ny; }
+        b.pinCd=0.09; pin.ph=tReal;
+        if(pin.kind==='bump'){
+          const sp=Math.hypot(b.vx,b.vy), cap=900*U, k=Math.min(cap/sp,1.35);
+          b.vx*=k; b.vy*=k; b.heat=Math.min(6,(b.heat||0)+1);
+          puff(pin.x,pin.y,4,'#ff8ab0',120); beep(330,0.05,'square',0.4,120);
+        } else if(!b.isSplit&&balls.length+newSplits.length<70){
+          b.isSplit=true;
+          const a=Math.atan2(b.vy,b.vx), sp=Math.hypot(b.vx,b.vy);
+          b.vx=Math.cos(a-0.35)*sp; b.vy=Math.sin(a-0.35)*sp;
+          newSplits.push({x:b.x,y:b.y,vx:Math.cos(a+0.35)*sp,vy:Math.sin(a+0.35)*sp,
+            key:b.key,r:b.r,life:b.life,cd:0,pinCd:0.09,heat:b.heat,isSplit:true,dead:false,trail:[]});
+          puff(pin.x,pin.y,5,'#7fe8d0',120); beep(700,0.06,'triangle',0.5,150);
+        }
+        break;
+      }
+    }
     if(b.cd<=0) for(const m of mons){
       if(m.dead) continue;
       const dx=b.x-m.x, dy=b.y-m.y, d=Math.hypot(dx,dy);
@@ -358,6 +400,7 @@ function update(dt){
     }
   }
   balls=balls.filter(b=>!b.dead);
+  balls.push(...newSplits);
 
   // monsters
   for(const m of mons){
@@ -426,6 +469,30 @@ function draw(){
     ctx.setLineDash([]);
   }
 
+  // pins
+  for(const pin of pins){
+    const flash=Math.max(0,1-(tReal-pin.ph)*3);
+    if(pin.kind==='bump'){
+      const r=12*U;
+      ctx.fillStyle='#b0446e'; ctx.beginPath(); ctx.arc(pin.x,pin.y+1.5,r,0,7); ctx.fill();
+      ctx.fillStyle='#ff8ab0'; ctx.beginPath(); ctx.arc(pin.x,pin.y,r*(0.94+flash*0.15),0,7); ctx.fill();
+      ctx.strokeStyle='rgba(255,255,255,'+(0.35+flash*0.5)+')'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(pin.x,pin.y,r*0.55,0,7); ctx.stroke();
+    } else {
+      const r=10*U;
+      ctx.save(); ctx.translate(pin.x,pin.y); ctx.rotate(0.785);
+      ctx.fillStyle='#3fa892'; ctx.fillRect(-r*0.8,-r*0.8+1.5,r*1.6,r*1.6);
+      ctx.fillStyle='#7fe8d0'; const k=r*0.8*(1+flash*0.15);
+      ctx.fillRect(-k,-k,2*k,2*k); ctx.restore();
+      ctx.fillStyle='rgba(255,255,255,'+(0.5+flash*0.5)+')';
+      ctx.beginPath(); ctx.arc(pin.x,pin.y,2.5,0,7); ctx.fill();
+    }
+  }
+  if(placing){
+    ctx.fillStyle='rgba(239,230,216,0.8)'; ctx.textAlign='center';
+    ctx.font='700 18px "Arial Narrow","Avenir Next Condensed",sans-serif';
+    ctx.fillText('TAP THE PIT TO PLACE YOUR '+(placing==='bump'?'BUMPER':'SPLITTER'), W/2, H/2);
+  }
   // gems
   for(const g of gems){
     ctx.fillStyle='#5ce8a4';
@@ -462,6 +529,8 @@ function draw(){
       ctx.beginPath(); ctx.arc(b.trail[i][0],b.trail[i][1],b.r*(1-i/8),0,7); ctx.fill();
     }
     ctx.globalAlpha=1;
+    if(b.heat>0){ ctx.strokeStyle='rgba(255,255,255,'+(0.12*b.heat)+')'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(b.x,b.y,b.r+2.5,0,7); ctx.stroke(); }
     ctx.fillStyle=d.dk; ctx.beginPath(); ctx.arc(b.x,b.y+1,b.r,0,7); ctx.fill();
     ctx.fillStyle=d.hex; ctx.beginPath(); ctx.arc(b.x,b.y,b.r*0.9,0,7); ctx.fill();
     ctx.fillStyle='rgba(255,255,255,0.4)';
