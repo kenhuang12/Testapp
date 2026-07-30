@@ -46,9 +46,9 @@
 <div id="title" class="overlay">
   <div class="eyebrow">Playable Prototype Nº3</div>
   <h1>Pit&nbsp;Fall</h1>
-  <div class="rules"><b>Drag to move — your launcher fires on its own.</b>
-    Strafe to angle your shots, bank them off walls to heat them up, and slip
-    balls through the gaps — <b>strikes from above deal bonus damage.</b>
+  <div class="rules"><b>Drag below the line to move. Touch above it to aim.</b>
+    Balls fire themselves — bank them off walls to heat them up, slip them
+    through the gaps, and <b>strike from above for bonus damage.</b>
     Dodge the spit. Fuse maxed balls into monsters.</div>
   <div class="cta">Tap to descend</div>
 </div>
@@ -240,16 +240,34 @@ function damageMon(m,dmg,key){
   if(m.hp<=0) killMon(m);
 }
 
-// ---------- input: drag anywhere to move the launcher ----------
+// ---------- input: below the line moves, above the line aims ----------
+const clampX=x=>Math.max(24,Math.min(W-24,x));
+function setAim(x,y){
+  let a=Math.atan2(y-playerY, x-playerX);
+  if(a>-0.15&&a<=Math.PI/2) a=-0.15;
+  else if((a>Math.PI/2&&a<Math.PI)||(a<-Math.PI+0.15&&a>=-Math.PI)) a=-Math.PI+0.15;
+  aimA=a;
+}
+const ptrs=new Map();
 addEventListener('pointerdown',e=>{
   initAudio();
   if(state==='title'){ startGame(); return; }
   if(state==='over'){ if(tReal-overAt>0.6) startGame(); return; }
-  if(paused||!e.isPrimary) return;
-  aiming=true; moveTX=Math.max(24,Math.min(W-24,e.clientX));
+  if(paused) return;
+  const role=e.clientY>lineY?'move':'aim';
+  ptrs.set(e.pointerId,role);
+  if(role==='move') moveTX=clampX(e.clientX);
+  else { aiming=true; setAim(e.clientX,e.clientY); }
 });
-addEventListener('pointermove',e=>{ if(aiming&&e.isPrimary&&!paused) moveTX=Math.max(24,Math.min(W-24,e.clientX)); });
-addEventListener('pointerup',()=>{ aiming=false; });
+addEventListener('pointermove',e=>{
+  if(paused) return;
+  const role=ptrs.get(e.pointerId); if(!role) return;
+  if(role==='move') moveTX=clampX(e.clientX);
+  else setAim(e.clientX,e.clientY);
+});
+const endPtr=e=>{ if(ptrs.get(e.pointerId)==='aim') aiming=false; ptrs.delete(e.pointerId); };
+addEventListener('pointerup',endPtr);
+addEventListener('pointercancel',endPtr);
 
 // ---------- level ups ----------
 function offerCards(){
@@ -346,14 +364,11 @@ function hurt(d,x){
 function update(dt){
   tGame+=dt;
   wave=1+Math.floor(tGame/18);
-  // movement: launcher chases the thumb; strafe speed tilts the firing angle
+  // movement: launcher chases the thumb in the move strip
   {
-    const px0=playerX, maxV=520*U;
+    const maxV=560*U;
     const dx=moveTX-playerX, mv=Math.min(Math.abs(dx), maxV*dt);
     playerX+=Math.sign(dx)*mv;
-    const instV=(playerX-px0)/Math.max(dt,1e-4);
-    playerVX+=(instV-playerVX)*Math.min(1,dt*12);
-    aimA=-Math.PI/2+Math.max(-1,Math.min(1,playerVX/maxV))*0.55;
   }
   if(xp>=xpNeed){ xp-=xpNeed; xpNeed=Math.round(xpNeed*1.3); offerCards(); }
   if(wave%5===0&&lastBossWave!==wave){ lastBossWave=wave; spawnBoss(); }
@@ -527,7 +542,8 @@ function draw(){
   // side walls
   ctx.fillStyle='#2a2338'; ctx.fillRect(0,0,4,H); ctx.fillRect(W-4,0,4,H);
 
-  // danger line
+  // danger line + move strip hint
+  ctx.fillStyle='rgba(239,230,216,0.03)'; ctx.fillRect(0,lineY,W,H-lineY);
   ctx.strokeStyle='rgba(255,122,60,0.6)'; ctx.lineWidth=2; ctx.setLineDash([8,7]);
   ctx.beginPath(); ctx.moveTo(0,lineY); ctx.lineTo(W,lineY); ctx.stroke(); ctx.setLineDash([]);
 
