@@ -36,19 +36,17 @@
   .card:active{transform:scale(.985)}
   .card .cname{font-size:19px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
   .card .cdesc{font-size:14px;color:var(--dim);line-height:1.4;margin-top:4px}
-  .card.fuse{border-left-color:#f6f2ff;background:#241d38}
-  .card.fuse .cname{color:#f6f2ff}
   .card:focus-visible{outline:2px solid var(--ember);outline-offset:2px}
 </style>
 
 <canvas id="c"></canvas>
 
 <div id="title" class="overlay">
-  <div class="eyebrow">Playable Prototype Nº2 · Rev B</div>
+  <div class="eyebrow">Playable Prototype Nº2 · Rev C</div>
   <h1>Match&nbsp;Pit</h1>
-  <div class="rules">Monsters strike on a timer. <b>Match 3</b> to hit whichever one
-    is about to attack. <b>Match 4</b> forges a Blast gem, <b>match 5</b> a Prism.
-    Level up and <b>fuse two gem types into one</b>. Outlast the waves.</div>
+  <div class="rules">Monsters strike on a timer — <b>match 3</b> to hit whichever one
+    is about to attack. <b>Match 4</b> forges an ability gem: tap it to cast its
+    color's move. <b>Match 5</b> forges a <b>super gem</b> with a devastating one.</div>
   <div class="cta">Tap to fight</div>
 </div>
 
@@ -73,7 +71,6 @@
   if(!m){ m=document.createElement('meta'); m.name='viewport'; document.head.appendChild(m); }
   m.content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
 }
-// kill page scroll / pull-to-refresh / pinch on mobile
 document.addEventListener('touchmove', e=>e.preventDefault(), {passive:false});
 document.addEventListener('gesturestart', e=>e.preventDefault());
 
@@ -102,31 +99,20 @@ if(window.visualViewport) visualViewport.addEventListener('resize',resize);
 resize(); setTimeout(resize,100);
 const gx=c=>boardX+cell*(c+0.5), gy=r=>boardTop+cell*(r+0.5);
 
-// ---------- colors / build ----------
-const BASE={
-  fire :{name:'FIRE',  hex:'#ff6b4a', dk:'#b23a24', base:13, shape:'diamond', props:{}},
-  frost:{name:'FROST', hex:'#58c7ff', dk:'#2b7fb0', base:8,  shape:'circle',  props:{slow:2.5}},
-  volt :{name:'VOLT',  hex:'#ffd23f', dk:'#b28e14', base:7,  shape:'triangle',props:{chain:2}},
-  venom:{name:'VENOM', hex:'#5ce8a4', dk:'#2a9c66', base:6,  shape:'square',  props:{poison:4}},
+// ---------- colors ----------
+const COLORS={
+  fire :{name:'FIRE',  hex:'#ff6b4a', dk:'#b23a24', base:13, shape:'diamond', props:{},
+         a4:'FIREBALL', a5:'METEOR'},
+  frost:{name:'FROST', hex:'#58c7ff', dk:'#2b7fb0', base:8,  shape:'circle',  props:{slow:2.5},
+         a4:'FREEZE', a5:'ICE AGE'},
+  volt :{name:'VOLT',  hex:'#ffd23f', dk:'#b28e14', base:7,  shape:'triangle',props:{chain:2},
+         a4:'STORM', a5:'MAELSTROM'},
+  venom:{name:'VENOM', hex:'#5ce8a4', dk:'#2a9c66', base:6,  shape:'square',  props:{poison:4},
+         a4:'LIFESTEAL', a5:'OUTBREAK'},
 };
-const FUSE={
-  'fire+frost':{name:'STEAM',  hex:'#cfe8ff', dk:'#7fa8c9'},
-  'fire+volt' :{name:'PLASMA', hex:'#ffb14a', dk:'#c07c1e', extra:{splash:1}},
-  'fire+venom':{name:'NAPALM', hex:'#ff8a3c', dk:'#c05a18', extra:{splash:1}},
-  'frost+volt':{name:'STATIC', hex:'#a9d9ff', dk:'#6f9cc4'},
-  'frost+venom':{name:'CRYOTOX',hex:'#7fe8d0', dk:'#3fa892'},
-  'venom+volt':{name:'PLAGUE ARC',hex:'#c9f04d', dk:'#8aa826'},
-};
-const PRISM={name:'PRISM', hex:'#f6f2ff', dk:'#9a90c9', base:16, shape:'hex', props:{}};
-let colors={}, lvl={}, surge=0, chill=0;
-function activeList(){ return Object.keys(colors); }
-function colDef(cn){ return cn==='prism'?PRISM:colors[cn]; }
-function makeFusion(a,b){
-  const key=[a,b].sort().join('+'), f=FUSE[key]; if(!f) return null;
-  const A=colors[a], B=colors[b];
-  const props=Object.assign({},A.props,B.props,f.extra||{});
-  return {name:f.name, hex:f.hex, dk:f.dk, base:(A.base+B.base)*1.7, shape:'hex', props, fused:true};
-}
+const ACT=Object.keys(COLORS);
+let lvl={}, surge=0, chill=0, leech={t:0,mult:0.35};
+const ROMAN=['','I','II','III','IV','V'];
 
 // ---------- state ----------
 let state='title', grid=[], busy=false, swapping=null, resolveT=0, combo=0, pendSwapCell=null;
@@ -154,10 +140,10 @@ const sBad=()=>beep(120,0.09,'sine',0.4,-40);
 const sKill=()=>{beep(560,0.12,'square',0.4,-260);beep(85,0.1,'sine',0.7);};
 const sHurt=()=>beep(150,0.28,'sawtooth',0.8,-70);
 const sLvl=()=>{beep(523,0.12,'triangle',0.8);setTimeout(()=>beep(784,0.2,'triangle',0.8),110);};
-const sFuse=()=>{beep(392,0.15,'triangle',0.9);setTimeout(()=>beep(587,0.15,'triangle',0.9),130);
-  setTimeout(()=>beep(880,0.3,'triangle',1),260);};
 const sBoss=()=>beep(55,0.6,'sawtooth',0.9,12);
 const sPow=()=>{beep(659,0.1,'triangle',0.9);setTimeout(()=>beep(988,0.22,'triangle',0.9),90);};
+const sSuper=()=>{beep(392,0.14,'triangle',1);setTimeout(()=>beep(587,0.14,'triangle',1),120);
+  setTimeout(()=>beep(880,0.32,'triangle',1),240);};
 
 // ---------- fx ----------
 function puff(x,y,n,col,pow){ for(let i=0;i<n;i++){ const a=Math.random()*6.283,s=rnd(40,pow||170);
@@ -167,7 +153,7 @@ function addShake(v){ shake+=v*(reduceMotion?0.25:1); }
 
 // ---------- board ----------
 function newGem(cn,c,r,above){ return {cn,pw:null,px:gx(c),py:above!=null?above:gy(r)}; }
-function randColor(){ const a=activeList(); return a[Math.floor(Math.random()*a.length)]; }
+function randColor(){ return ACT[Math.floor(Math.random()*ACT.length)]; }
 function fillBoard(){
   grid=[]; for(let r=0;r<RO;r++){ grid.push([]); for(let c=0;c<CO;c++) grid[r].push(newGem(randColor(),c,r)); }
   let guard=0;
@@ -180,16 +166,16 @@ function findRuns(){
   const runs=[];
   for(let r=0;r<RO;r++){ let c=0; while(c<CO){ let c2=c; const cn=grid[r][c]&&grid[r][c].cn;
     while(cn&&c2<CO&&grid[r][c2]&&grid[r][c2].cn===cn)c2++;
-    if(cn&&cn!=='prism'&&c2-c>=3){ const cells=[]; for(let k=c;k<c2;k++)cells.push([r,k]); runs.push({cn,cells,len:c2-c}); }
+    if(cn&&c2-c>=3){ const cells=[]; for(let k=c;k<c2;k++)cells.push([r,k]); runs.push({cn,cells,len:c2-c}); }
     c=Math.max(c2,c+1); } }
   for(let c=0;c<CO;c++){ let r=0; while(r<RO){ let r2=r; const cn=grid[r][c]&&grid[r][c].cn;
     while(cn&&r2<RO&&grid[r2][c]&&grid[r2][c].cn===cn)r2++;
-    if(cn&&cn!=='prism'&&r2-r>=3){ const cells=[]; for(let k=r;k<r2;k++)cells.push([k,c]); runs.push({cn,cells,len:r2-r}); }
+    if(cn&&r2-r>=3){ const cells=[]; for(let k=r;k<r2;k++)cells.push([k,c]); runs.push({cn,cells,len:r2-r}); }
     r=Math.max(r2,r+1); } }
   return runs;
 }
 function movesExist(){
-  for(let r=0;r<RO;r++)for(let c=0;c<CO;c++) if(grid[r][c]&&grid[r][c].pw==='prism') return true;
+  for(let r=0;r<RO;r++)for(let c=0;c<CO;c++) if(grid[r][c]&&grid[r][c].pw) return true;
   const trySwap=(r1,c1,r2,c2)=>{ const a=grid[r1][c1],b=grid[r2][c2];
     grid[r1][c1]=b;grid[r2][c2]=a; const ok=findRuns().length>0; grid[r1][c1]=a;grid[r2][c2]=b; return ok; };
   for(let r=0;r<RO;r++)for(let c=0;c<CO;c++){
@@ -212,34 +198,16 @@ function settleStep(dt){
     if(d>1){ done=false; const m=Math.min(d,sp); g.px+=dx/d*m; g.py+=dy/d*m; } else {g.px=tx;g.py=ty;} }
   return done;
 }
-
-// clear-set machinery: power gems expand what gets cleared
 const key=(r,c)=>r*CO+c;
-function expandPower(clear){
-  const q=[...clear.keys()];
-  while(q.length){
-    const k=q.shift(), r=Math.floor(k/CO), c=k%CO, g=grid[r][c];
-    if(!g) continue;
-    if(g.pw==='blast'){
-      g.pw=null; sPow(); addShake(5);
-      for(let cc=0;cc<CO;cc++) if(!clear.has(key(r,cc))&&grid[r][cc]){ clear.set(key(r,cc),1); q.push(key(r,cc)); }
-      for(let rr=0;rr<RO;rr++) if(!clear.has(key(rr,c))&&grid[rr][c]){ clear.set(key(rr,c),1); q.push(key(rr,c)); }
-    } else if(g.pw==='prism'){
-      g.pw=null; sPow(); addShake(7);
-      const act=activeList(), pick=act[Math.floor(Math.random()*act.length)];
-      for(let rr=0;rr<RO;rr++)for(let cc=0;cc<CO;cc++)
-        if(grid[rr][cc]&&grid[rr][cc].cn===pick&&!clear.has(key(rr,cc))){ clear.set(key(rr,cc),1); q.push(key(rr,cc)); }
-    }
-  }
-}
+function colMult(cn){ return (1+0.5*((lvl[cn]||1)-1))*(1+0.25*surge); }
 function fireCells(clear){
   const comboMult=1+0.25*(combo-1);
   let i=0;
   for(const [k,mult] of clear){
     const r=Math.floor(k/CO), c=k%CO, g=grid[r][c]; if(!g) continue;
-    const cd=colDef(g.cn);
-    const clv=g.cn==='prism'?3:(lvl[g.cn]||1);
-    const dmg=cd.base*(1+0.5*(clv-1))*(1+0.25*surge)*mult*comboMult;
+    const cd=COLORS[g.cn];
+    if(g.pw) castAbility(g.pw,g.cn,g.px,g.py); // matched ability gems still cast
+    const dmg=cd.base*colMult(g.cn)*mult*comboMult;
     projs.push({x:g.px,y:g.py,cn:g.cn,dmg,delay:i*0.035,target:null,dead:false});
     puff(g.px,g.py,5,cd.hex,120);
     grid[r][c]=null; score+=Math.round(2*mult*comboMult); i++;
@@ -254,7 +222,7 @@ function popRuns(runs){
     if(run.len>=4){
       keep=run.cells.find(([r,c])=>pendSwapCell&&r===pendSwapCell.r&&c===pendSwapCell.c)
         || run.cells[Math.floor(run.cells.length/2)];
-      powered.push({r:keep[0],c:keep[1],pw:run.len>=5?'prism':'blast',cn:run.cn});
+      powered.push({r:keep[0],c:keep[1],pw:run.len>=5?'a5':'a4',cn:run.cn});
     }
     for(const [r,c] of run.cells){
       if(keep&&r===keep[0]&&c===keep[1]) continue;
@@ -262,14 +230,14 @@ function popRuns(runs){
     }
   }
   pendSwapCell=null;
-  expandPower(clear);
-  // don't clear cells that are becoming power gems
   for(const p of powered) clear.delete(key(p.r,p.c));
   fireCells(clear);
   for(const p of powered){ const g=grid[p.r][p.c]; if(!g) continue;
-    g.pw=p.pw; if(p.pw==='prism') g.cn='prism';
-    puff(g.px,g.py,10,p.pw==='prism'?'#f6f2ff':colDef(g.cn).hex,160);
-    float(g.px,g.py-16,p.pw==='prism'?'PRISM!':'BLAST!',p.pw==='prism'?'#f6f2ff':colDef(g.cn).hex,15);
+    g.pw=p.pw; g.cn=p.cn;
+    const cd=COLORS[p.cn];
+    puff(g.px,g.py,p.pw==='a5'?16:10,cd.hex,170);
+    float(g.px,g.py-16,p.pw==='a5'?cd.a5+' GEM!':cd.a4+' GEM!',cd.hex,15);
+    if(p.pw==='a5') sSuper(); else sPow();
   }
   sPop(Math.min(combo-1,7));
   if(combo>=2) float(W/2, boardTop-26, 'CHAIN ×'+combo, '#ff7a3c', 20);
@@ -283,26 +251,54 @@ function gravity(){
     for(;r>=0;r--){ grid[r][c]=newGem(randColor(),c,r, boardTop-cell*(above++)+cell*0.5-cell); }
   }
 }
-function activatePrism(pr,pc,or_,oc){
-  combo=1;
-  const other=grid[or_][oc], clear=new Map();
-  clear.set(key(pr,pc),1.5);
-  if(other.pw==='prism'){
-    for(let r=0;r<RO;r++)for(let c=0;c<CO;c++) if(grid[r][c]) clear.set(key(r,c),1.5);
-  } else {
-    for(let r=0;r<RO;r++)for(let c=0;c<CO;c++)
-      if(grid[r][c]&&grid[r][c].cn===other.cn) clear.set(key(r,c),1.5);
+
+// ---------- abilities ----------
+function castAbility(tier,cn,px,py){
+  const cd=COLORS[cn], mult=colMult(cn), front=frontMon();
+  const nm=tier==='a5'?cd.a5:cd.a4;
+  float(W/2, fieldTop+16, nm+'!', cd.hex, 24);
+  if(tier==='a5'){ sSuper(); addShake(10); } else { sPow(); addShake(5); }
+  if(cn==='fire'){
+    if(tier==='a4'){ if(front){ hitMon(front,60*mult,'fire'); puff(front.x,front.y,20,'#ff6b4a',260); } }
+    else { if(front){ hitMon(front,150*mult,'fire'); puff(front.x,front.y,34,'#ff6b4a',320); }
+      for(const m of mons) if(!m.dead&&m!==front){ hitMon(m,60*mult,'fire'); puff(m.x,m.y,10,'#ff6b4a',180); } }
   }
-  grid[pr][pc].pw=null; // consumed, not re-expanded
-  expandPower(clear);
-  fireCells(clear);
-  sPow(); addShake(8);
-  busy=true; swapping=null; resolveT=0.15; gravity();
+  if(cn==='frost'){
+    if(tier==='a4'){ if(front){ front.stun=Math.max(front.stun||0,2.5+0.5*(lvl.frost||1)); puff(front.x,front.y,14,'#58c7ff',200); } }
+    else { for(const m of mons) if(!m.dead){ m.stun=Math.max(m.stun||0,4); puff(m.x,m.y,10,'#58c7ff',160); } }
+  }
+  if(cn==='volt'){
+    const dmg=tier==='a5'?45:18;
+    for(const m of mons) if(!m.dead){
+      hitMon(m,dmg*mult,'volt');
+      zaps.push({x1:m.x,y1:-10,x2:m.x,y2:m.y,life:0.22});
+      if(tier==='a5') m.stun=Math.max(m.stun||0,1);
+    }
+  }
+  if(cn==='venom'){
+    if(tier==='a4'){ leech.t=Math.max(leech.t,5+(lvl.venom||1)); }
+    else {
+      // OUTBREAK: convert every gem of the largest other color into venom
+      const counts={};
+      for(let r=0;r<RO;r++)for(let c=0;c<CO;c++){ const g=grid[r][c];
+        if(g&&g.cn!=='venom') counts[g.cn]=(counts[g.cn]||0)+1; }
+      let pick=null; for(const k in counts) if(!pick||counts[k]>counts[pick]) pick=k;
+      if(pick){ for(let r=0;r<RO;r++)for(let c=0;c<CO;c++){ const g=grid[r][c];
+        if(g&&g.cn===pick){ g.cn='venom'; puff(g.px,g.py,4,'#5ce8a4',90); } }
+        float(W/2,boardTop-46,COLORS[pick].name+' → VENOM','#5ce8a4',20); }
+      for(const m of mons) if(!m.dead) m.poison={dps:6*mult,t:4};
+    }
+  }
 }
-function transmute(a,b,toCn){
-  for(let r=0;r<RO;r++)for(let c=0;c<CO;c++){ const g=grid[r][c];
-    if(g&&(g.cn===a||g.cn===b)){ g.cn=toCn; puff(g.px,g.py,4,colors[toCn].hex,90); } }
-  busy=true; resolveT=0.25;
+function tapAbilityGem(r,c){
+  const g=grid[r][c]; if(!g||!g.pw) return;
+  combo=1;
+  const clear=new Map([[key(r,c),1.5]]);
+  const tier=g.pw, cn=g.cn, px=g.px, py=g.py;
+  g.pw=null; // consumed; fireCells would double-cast otherwise
+  fireCells(clear);
+  castAbility(tier,cn,px,py);
+  gravity(); busy=true; swapping=null; resolveT=0.15;
 }
 
 // ---------- monsters ----------
@@ -329,7 +325,7 @@ function spawnWave(){
       hp:hpv,maxhp:hpv, boss:e.boss, arrived:false,
       atkMax:e.boss?6:Math.max(2.4,5.2-0.15*wave), atkT:0,
       dmg:e.boss?18+2*wave:Math.round(4+wave*1.1),
-      slow:0, poison:null, ph:Math.random()*7, dead:false, lunge:0});
+      slow:0, stun:0, poison:null, ph:Math.random()*7, dead:false, lunge:0});
     mons[mons.length-1].atkT=mons[mons.length-1].atkMax*rnd(0.8,1.3);
   });
   if(boss){ sBoss(); addShake(10); float(W/2,fieldTop+30,'BOSS WAVE','#ff4d6d',24); }
@@ -337,8 +333,9 @@ function spawnWave(){
 }
 function hitMon(m,dmg,cn){
   m.hp-=dmg;
-  const cd=colDef(cn);
+  const cd=COLORS[cn];
   float(m.x+rnd(-8,8),m.y-m.r-8,'-'+Math.round(dmg),cd?cd.hex:'#ffd23f',13);
+  if(leech.t>0) hp=Math.min(100,hp+dmg*leech.mult);
   const P=cd&&cd.props?cd.props:{};
   if(P.slow) m.slow=Math.max(m.slow,P.slow);
   if(P.poison) m.poison={dps:P.poison*(1+0.25*surge),t:3};
@@ -352,13 +349,11 @@ function checkDead(m){
 }
 function applyHit(p,m){
   hitMon(m,p.dmg,p.cn);
-  const cd=colDef(p.cn), P=cd&&cd.props?cd.props:{};
+  const cd=COLORS[p.cn], P=cd&&cd.props?cd.props:{};
   if(P.chain){ const others=mons.filter(o=>!o.dead&&o!==m)
       .sort((a,b)=>Math.hypot(a.x-m.x,a.y-m.y)-Math.hypot(b.x-m.x,b.y-m.y)).slice(0,P.chain);
     for(const o of others){ hitMon(o,p.dmg*0.6,p.cn);
       zaps.push({x1:m.x,y1:m.y,x2:o.x,y2:o.y,life:0.18}); } }
-  if(P.splash){ for(const o of mons){ if(!o.dead&&o!==m&&Math.hypot(o.x-m.x,o.y-m.y)<cell*2.2)
-      hitMon(o,p.dmg*0.6,p.cn); } }
   puff(p.x,p.y,8,cd?cd.hex:'#fff',140);
 }
 
@@ -373,24 +368,29 @@ addEventListener('pointerdown',e=>{
   if(state==='title'){ startGame(); return; }
   if(state==='over'){ if(tReal-overAt>0.6) startGame(); return; }
   if(paused||busy||!e.isPrimary) return;
-  const cl=cellAt(e.clientX,e.clientY); if(cl) drag={r:cl[0],c:cl[1],x:e.clientX,y:e.clientY};
+  const cl=cellAt(e.clientX,e.clientY); if(cl) drag={r:cl[0],c:cl[1],x:e.clientX,y:e.clientY,moved:false};
 });
 addEventListener('pointermove',e=>{
   if(!drag||busy||paused||!e.isPrimary) return;
   const dx=e.clientX-drag.x, dy=e.clientY-drag.y;
   if(Math.hypot(dx,dy)<cell*0.35) return;
+  drag.moved=true;
   let r2=drag.r,c2=drag.c;
   if(Math.abs(dx)>Math.abs(dy)) c2+=dx>0?1:-1; else r2+=dy>0?1:-1;
   if(r2<0||r2>=RO||c2<0||c2>=CO){ drag=null; return; }
   doSwap(drag.r,drag.c,r2,c2); drag=null;
 });
-addEventListener('pointerup',()=>{ drag=null; });
+addEventListener('pointerup',e=>{
+  if(drag&&!drag.moved&&!busy&&!paused&&state==='play'){
+    const g=grid[drag.r]&&grid[drag.r][drag.c];
+    if(g&&g.pw) tapAbilityGem(drag.r,drag.c);
+  }
+  drag=null;
+});
 
 function doSwap(r1,c1,r2,c2){
   const a=grid[r1][c1], b=grid[r2][c2];
   if(!a||!b) return;
-  if(a.pw==='prism'){ activatePrism(r1,c1,r2,c2); sSwap(); return; }
-  if(b.pw==='prism'){ activatePrism(r2,c2,r1,c1); sSwap(); return; }
   grid[r1][c1]=b; grid[r2][c2]=a;
   const ok=findRuns().length>0;
   if(ok) pendSwapCell={r:r2,c:c2};
@@ -400,27 +400,20 @@ function doSwap(r1,c1,r2,c2){
 // ---------- level ups ----------
 function offerCards(){
   paused=true; $cards.innerHTML='';
-  const opts=[]; const act=activeList();
-  for(let i=0;i<act.length;i++)for(let j=i+1;j<act.length;j++){
-    const a=act[i],b=act[j];
-    if((lvl[a]||1)>=3&&(lvl[b]||1)>=3&&!colors[a].fused&&!colors[b].fused){
-      const f=makeFusion(a,b); if(f) opts.push({t:'fuse',a,b,f}); } }
-  for(const c of act) if((lvl[c]||1)<3&&!colors[c].fused) opts.push({t:'up',c});
+  const opts=[];
+  for(const c of ACT) if((lvl[c]||1)<5) opts.push({t:'up',c});
   if(hp<70) opts.push({t:'heal'});
   if(surge<4) opts.push({t:'surge'});
   if(chill<3) opts.push({t:'chill'});
-  const fuses=opts.filter(o=>o.t==='fuse'), rest=opts.filter(o=>o.t!=='fuse');
-  for(let i=rest.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[rest[i],rest[j]]=[rest[j],rest[i]];}
-  const picks=(fuses.length?[fuses[Math.floor(Math.random()*fuses.length)]]:[]).concat(rest).slice(0,3);
+  for(let i=opts.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[opts[i],opts[j]]=[opts[j],opts[i]];}
+  const picks=opts.slice(0,3);
   if(!picks.length){ score+=100; hp=Math.min(100,hp+10); paused=false; return; }
   for(const o of picks){
-    const btn=document.createElement('button'); btn.className='card'+(o.t==='fuse'?' fuse':'');
+    const btn=document.createElement('button'); btn.className='card';
     let nm='',ds='';
-    if(o.t==='up'){ const L=(lvl[o.c]||1)+1; nm=colors[o.c].name+' '+['','I','II','III'][L];
-      ds=colors[o.c].name.toLowerCase()+' matches deal +50% damage.';
-      btn.style.borderLeftColor=colors[o.c].hex; }
-    if(o.t==='fuse'){ nm='FUSE → '+o.f.name;
-      ds=colors[o.a].name+' + '+colors[o.b].name+' become one gem. Fewer colors, easier matches, both powers in every shot.'; }
+    if(o.t==='up'){ const L=(lvl[o.c]||1)+1; nm=COLORS[o.c].name+' '+ROMAN[L];
+      ds=COLORS[o.c].name.toLowerCase()+' matches and abilities deal +50% damage.';
+      btn.style.borderLeftColor=COLORS[o.c].hex; }
     if(o.t==='heal'){ nm='MEND'; ds='Restore 35 health.'; btn.style.borderLeftColor='#ff4d6d'; }
     if(o.t==='surge'){ nm='SURGE'; ds='All damage +25%.'; }
     if(o.t==='chill'){ nm='DREAD'; ds='Monster attacks charge 12% slower.'; btn.style.borderLeftColor='#58c7ff'; }
@@ -435,20 +428,11 @@ function applyCard(o){
   if(o.t==='heal') hp=Math.min(100,hp+35);
   if(o.t==='surge') surge++;
   if(o.t==='chill') chill++;
-  if(o.t==='fuse'){
-    const k=o.f.name.toLowerCase().replace(/\s/g,'');
-    delete colors[o.a]; delete colors[o.b]; delete lvl[o.a]; delete lvl[o.b];
-    colors[k]=o.f; lvl[k]=3;
-    transmute(o.a,o.b,k); sFuse(); addShake(8);
-    float(W/2,boardTop-40,o.f.name+'!',o.f.hex,26);
-  }
 }
 
 // ---------- flow ----------
 function startGame(){
-  colors={fire:Object.assign({},BASE.fire),frost:Object.assign({},BASE.frost),
-          volt:Object.assign({},BASE.volt),venom:Object.assign({},BASE.venom)};
-  lvl={fire:1,frost:1,volt:1,venom:1}; surge=0; chill=0;
+  lvl={fire:1,frost:1,volt:1,venom:1}; surge=0; chill=0; leech={t:0,mult:0.35};
   mons=[];projs=[];parts=[];floats=[];zaps=[];
   score=0;hp=100;wave=0;level=1;xp=0;xpNeed=25;waveDelay=0;
   combo=0;busy=false;swapping=null;paused=false;shake=0;hurtFlash=0;pendSwapCell=null;
@@ -467,8 +451,8 @@ function endGame(){
 // ---------- update ----------
 function update(dt){
   if(xp>=xpNeed){ xp-=xpNeed; level++; xpNeed=Math.round(xpNeed*1.35); offerCards(); }
+  leech.t=Math.max(0,leech.t-dt);
 
-  // board
   if(busy){
     if(swapping){
       if(settleStep(dt)){
@@ -491,11 +475,10 @@ function update(dt){
     if(runs.length){ busy=true; resolveT=0.05; }
   }
 
-  // projectiles home to the front target
   for(const p of projs){
     if(p.delay>0){ p.delay-=dt; continue; }
     if(!p.target||p.target.dead){ p.target=frontMon(); }
-    if(!p.target){ p.dead=true; puff(p.x,p.y,3,colDef(p.cn)?colDef(p.cn).hex:'#fff',60); continue; }
+    if(!p.target){ p.dead=true; puff(p.x,p.y,3,COLORS[p.cn]?COLORS[p.cn].hex:'#fff',60); continue; }
     const dx=p.target.x-p.x, dy=p.target.y-p.y, d=Math.hypot(dx,dy);
     const sp=(H*1.3)*dt;
     if(d<Math.max(10,p.target.r*0.8)||d<sp){ applyHit(p,p.target); p.dead=true; }
@@ -503,20 +486,22 @@ function update(dt){
   }
   projs=projs.filter(p=>!p.dead);
 
-  // monsters
   let alive=0;
   for(const m of mons){
     if(m.dead) continue; alive++;
     m.ph+=dt*2;
     if(!m.arrived){ m.y+=Math.min(m.ty-m.y, 140*dt); if(m.y>=m.ty-0.5){ m.y=m.ty; m.arrived=true; } continue; }
-    let rate=1-0.12*chill; if(m.slow>0){ rate*=0.5; m.slow-=dt; }
-    m.atkT-=dt*rate;
-    m.lunge=Math.max(0,m.lunge-dt*4);
-    if(m.atkT<=0){
-      m.atkT=m.atkMax*rnd(0.9,1.15); m.lunge=1;
-      hp-=m.dmg; hurtFlash=1; addShake(m.boss?12:6); sHurt();
-      float(W/2,boardTop-46,'-'+m.dmg,'#ff4d6d',18);
-      if(hp<=0){ hp=0; endGame(); return; }
+    if(m.stun>0){ m.stun-=dt; }
+    else {
+      let rate=1-0.12*chill; if(m.slow>0){ rate*=0.5; m.slow-=dt; }
+      m.atkT-=dt*rate;
+      m.lunge=Math.max(0,m.lunge-dt*4);
+      if(m.atkT<=0){
+        m.atkT=m.atkMax*rnd(0.9,1.15); m.lunge=1;
+        hp-=m.dmg; hurtFlash=1; addShake(m.boss?12:6); sHurt();
+        float(W/2,boardTop-46,'-'+m.dmg,'#ff4d6d',18);
+        if(hp<=0){ hp=0; endGame(); return; }
+      }
     }
     if(m.poison){ m.poison.t-=dt; m.hp-=m.poison.dps*dt; checkDead(m); if(m.poison&&m.poison.t<=0)m.poison=null; }
   }
@@ -549,20 +534,28 @@ function shapePath(x,y,r,s){
   ctx.closePath();
 }
 function drawGem(g){
-  const cd=colDef(g.cn); if(!cd) return;
+  const cd=COLORS[g.cn]; if(!cd) return;
   const r=cell*0.36;
   ctx.fillStyle=cd.dk; shapePath(g.px,g.py+1.5,r,cd.shape); ctx.fill();
   ctx.fillStyle=cd.hex; shapePath(g.px,g.py,r*0.94,cd.shape); ctx.fill();
   ctx.fillStyle='rgba(255,255,255,0.3)';
   ctx.beginPath(); ctx.arc(g.px-r*0.3,g.py-r*0.33,r*0.18,0,7); ctx.fill();
   if(g.pw){
-    const pulse=0.75+0.25*Math.sin(tReal*6);
-    ctx.strokeStyle='rgba(246,242,255,'+pulse+')'; ctx.lineWidth=2.5;
+    const s5=g.pw==='a5';
+    const pulse=0.7+0.3*Math.sin(tReal*(s5?8:6));
+    ctx.strokeStyle='rgba(246,242,255,'+pulse+')'; ctx.lineWidth=s5?3.5:2.5;
     shapePath(g.px,g.py,r+3,cd.shape); ctx.stroke();
-    ctx.fillStyle='rgba(255,255,255,0.9)';
-    if(g.pw==='blast'){ // cross glyph
-      ctx.fillRect(g.px-1.5,g.py-r*0.55,3,r*1.1); ctx.fillRect(g.px-r*0.55,g.py-1.5,r*1.1,3);
-    } else { ctx.beginPath(); ctx.arc(g.px,g.py,r*0.22,0,7); ctx.fill(); }
+    if(s5){ ctx.strokeStyle='rgba(246,242,255,'+(pulse*0.5)+')';
+      shapePath(g.px,g.py,r+7,cd.shape); ctx.stroke(); }
+    // sparkle glyph
+    ctx.fillStyle='rgba(255,255,255,0.95)';
+    const k=r*(s5?0.34:0.26);
+    ctx.beginPath();
+    ctx.moveTo(g.px,g.py-k); ctx.quadraticCurveTo(g.px+k*0.2,g.py-k*0.2,g.px+k,g.py);
+    ctx.quadraticCurveTo(g.px+k*0.2,g.py+k*0.2,g.px,g.py+k);
+    ctx.quadraticCurveTo(g.px-k*0.2,g.py+k*0.2,g.px-k,g.py);
+    ctx.quadraticCurveTo(g.px-k*0.2,g.py-k*0.2,g.px,g.py-k);
+    ctx.fill();
   }
 }
 function draw(){
@@ -575,39 +568,41 @@ function draw(){
   ctx.fillStyle='rgba(239,230,216,0.05)';
   for(const s of specks) ctx.fillRect(s[0]*W,s[1]*(boardTop-30),2*s[2]+1,2*s[2]+1);
 
-  // board frame
   ctx.fillStyle='#2a2338'; ctx.fillRect(boardX-6,boardTop-6,cell*CO+12,cell*RO+12);
   ctx.fillStyle='#1c1729'; ctx.fillRect(boardX,boardTop,cell*CO,cell*RO);
 
-  // gems
   ctx.save(); ctx.beginPath(); ctx.rect(boardX,boardTop-cell,cell*CO,cell*(RO+1)); ctx.clip();
   for(let r=0;r<RO;r++)for(let c=0;c<CO;c++){ const gm=grid[r]&&grid[r][c]; if(gm) drawGem(gm); }
   ctx.restore();
 
-  // monsters
   const front=state==='play'?frontMon():null;
   for(const m of mons){
     const lung=m.lunge*10;
     ctx.save(); ctx.translate(m.x,m.y+lung);
     const wob=Math.sin(m.ph*2)*0.05; ctx.scale(1+wob,1-wob);
-    const tele=m.arrived&&m.atkT<0.5;
+    const tele=m.arrived&&m.stun<=0&&m.atkT<0.5;
     if(tele) ctx.scale(1.12,1.12);
-    ctx.fillStyle=tele?'#e0a08a':(m.boss?'#a99175':'#cfc3ad');
+    ctx.fillStyle=m.stun>0?'#9fc4de':(tele?'#e0a08a':(m.boss?'#a99175':'#cfc3ad'));
     ctx.beginPath(); ctx.arc(0,0,m.r,0,7); ctx.fill();
-    ctx.fillStyle=m.boss?'#8a7358':'#b3a68c';
+    ctx.fillStyle=m.stun>0?'#7da6c4':(m.boss?'#8a7358':'#b3a68c');
     ctx.beginPath(); ctx.arc(0,m.r*0.35,m.r*0.6,0,7); ctx.fill();
     ctx.fillStyle='#1a1420'; const e=m.r*0.28;
-    ctx.beginPath(); ctx.arc(-e,-e*0.6,e*0.42,0,7); ctx.arc(e,-e*0.6,e*0.42,0,7); ctx.fill();
+    if(m.stun>0){ // X eyes
+      ctx.strokeStyle='#1a1420'; ctx.lineWidth=2;
+      for(const sx of [-e,e]){ ctx.beginPath();
+        ctx.moveTo(sx-e*0.3,-e*0.9); ctx.lineTo(sx+e*0.3,-e*0.3);
+        ctx.moveTo(sx+e*0.3,-e*0.9); ctx.lineTo(sx-e*0.3,-e*0.3); ctx.stroke(); }
+    } else {
+      ctx.beginPath(); ctx.arc(-e,-e*0.6,e*0.42,0,7); ctx.arc(e,-e*0.6,e*0.42,0,7); ctx.fill();
+    }
     if(m.poison){ ctx.fillStyle='rgba(92,232,164,0.3)'; ctx.beginPath(); ctx.arc(0,0,m.r+3,0,7); ctx.fill(); }
-    if(m.slow>0){ ctx.strokeStyle='rgba(88,199,255,0.6)'; ctx.lineWidth=2;
+    if(m.slow>0&&m.stun<=0){ ctx.strokeStyle='rgba(88,199,255,0.6)'; ctx.lineWidth=2;
       ctx.beginPath(); ctx.arc(0,0,m.r+4,0,7); ctx.stroke(); }
-    // attack timer arc (ember, fills as strike approaches)
-    if(m.arrived){
+    if(m.arrived&&m.stun<=0){
       const pr=1-Math.max(0,Math.min(1,m.atkT/m.atkMax));
       ctx.strokeStyle=tele?'#ff4d6d':'rgba(255,122,60,0.8)'; ctx.lineWidth=3;
       ctx.beginPath(); ctx.arc(0,0,m.r+7,-Math.PI/2,-Math.PI/2+6.283*pr); ctx.stroke();
     }
-    // hp ring
     if(m.hp<m.maxhp){ ctx.strokeStyle='#ff4d6d'; ctx.lineWidth=3;
       ctx.beginPath(); ctx.arc(0,0,m.r+11,-Math.PI/2,-Math.PI/2+6.283*Math.max(0,m.hp/m.maxhp)); ctx.stroke(); }
     ctx.restore();
@@ -618,13 +613,12 @@ function draw(){
     }
   }
 
-  // projectiles
-  for(const p of projs){ if(p.delay>0)continue; const cd=colDef(p.cn); if(!cd)continue;
+  for(const p of projs){ if(p.delay>0)continue; const cd=COLORS[p.cn]; if(!cd)continue;
     ctx.fillStyle=cd.hex;
     ctx.beginPath(); ctx.arc(p.x,p.y,5,0,7); ctx.fill();
     ctx.globalAlpha=0.3; ctx.beginPath(); ctx.arc(p.x,p.y,9,0,7); ctx.fill(); ctx.globalAlpha=1; }
 
-  for(const z of zaps){ ctx.strokeStyle='rgba(255,210,63,'+(z.life/0.18)+')'; ctx.lineWidth=2;
+  for(const z of zaps){ ctx.strokeStyle='rgba(255,210,63,'+(z.life/0.22)+')'; ctx.lineWidth=2;
     ctx.beginPath(); ctx.moveTo(z.x1,z.y1);
     ctx.lineTo((z.x1+z.x2)/2+rnd(-8,8),(z.y1+z.y2)/2+rnd(-8,8)); ctx.lineTo(z.x2,z.y2); ctx.stroke(); }
 
@@ -636,14 +630,14 @@ function draw(){
     ctx.font='700 '+f.size+'px "Arial Narrow","Avenir Next Condensed",sans-serif';
     ctx.fillText(f.txt,f.x,f.y); ctx.globalAlpha=1; }
 
-  // HUD
   if(state!=='title'){
-    // player hp bar above board
     const bw=cell*CO, bx=boardX, by=boardTop-22;
     ctx.fillStyle='rgba(239,230,216,0.12)'; ctx.fillRect(bx,by,bw,8);
     ctx.fillStyle=hp>35?'#5ce8a4':'#ff4d6d'; ctx.fillRect(bx,by,bw*Math.max(0,hp/100),8);
     ctx.fillStyle='#efe6d8'; ctx.textAlign='left';
     ctx.font='700 12px "Arial Narrow",sans-serif'; ctx.fillText(Math.ceil(hp)+' HP',bx,by-5);
+    if(leech.t>0){ ctx.fillStyle='#5ce8a4';
+      ctx.fillText('LIFESTEAL '+Math.ceil(leech.t)+'s',bx+70,by-5); }
     ctx.textAlign='center';
     ctx.font='700 18px "Arial Narrow","Avenir Next Condensed",sans-serif';
     ctx.fillStyle='#efe6d8'; ctx.fillText(String(score),W/2,26);
@@ -653,8 +647,8 @@ function draw(){
     ctx.fillStyle='#ff7a3c'; ctx.fillRect(W*0.2,50,W*0.6*Math.min(1,xp/xpNeed),4);
     ctx.textAlign='right'; ctx.font='11px "Arial Narrow",sans-serif';
     let ty=24;
-    for(const c of activeList()){ ctx.fillStyle=colors[c].hex;
-      ctx.fillText(colors[c].name+' '+['','I','II','III'][lvl[c]||1],W-10,ty); ty+=14; }
+    for(const c of ACT){ ctx.fillStyle=COLORS[c].hex;
+      ctx.fillText(COLORS[c].name+' '+ROMAN[lvl[c]||1],W-10,ty); ty+=14; }
   }
 
   if(hurtFlash>0){ ctx.fillStyle='rgba(255,77,109,'+hurtFlash*0.28+')';
