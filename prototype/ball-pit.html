@@ -46,9 +46,10 @@
 <div id="title" class="overlay">
   <div class="eyebrow">Playable Prototype Nº3</div>
   <h1>Pit&nbsp;Fall</h1>
-  <div class="rules"><b>Hold and drag to aim.</b> Every wall bounce makes a ball
-    hit harder. Slip through the gaps in the ranks — <b>balls striking from
-    above deal bonus damage.</b> Level up and fuse maxed balls into monsters.</div>
+  <div class="rules"><b>Drag to move — your launcher fires on its own.</b>
+    Strafe to angle your shots, bank them off walls to heat them up, and slip
+    balls through the gaps — <b>strikes from above deal bonus damage.</b>
+    Dodge the spit. Fuse maxed balls into monsters.</div>
   <div class="cta">Tap to descend</div>
 </div>
 
@@ -117,8 +118,9 @@ const mult=l=>1+0.45*(l-1);
 
 // ---------- state ----------
 let state='title';
-let balls=[], mons=[], gems=[], parts=[], floats=[], zaps=[], pins=[];
+let balls=[], mons=[], gems=[], parts=[], floats=[], zaps=[], pins=[], eprojs=[];
 let placing=null;
+let playerX=200, moveTX=200, playerVX=0;
 let score=0,best=0,hp=100,wave=1,xp=0,xpNeed=20,tGame=0,tReal=0;
 let rowT=1.2,lastBossWave=0,rotIdx=0,fireT=0.4;
 let aimA=-Math.PI/2, aiming=false;
@@ -161,7 +163,7 @@ function fireBall(){
   const sp=(d.big?430:560)*U;
   for(let i=0;i<count;i++){
     const off=(i-(count-1)/2)*0.10;
-    balls.push({x:W/2, y:playerY-16, vx:Math.cos(aimA+off)*sp, vy:Math.sin(aimA+off)*sp,
+    balls.push({x:playerX, y:playerY-16, vx:Math.cos(aimA+off)*sp, vy:Math.sin(aimA+off)*sp,
       key:slot.key, r:(d.big?11:7)*U, life:4.6, cd:0, pinCd:0, heat:0, behind:false, isSplit:false, dead:false,
       trail:[]});
   }
@@ -182,11 +184,12 @@ function spawnRow(){
     const roll=Math.random();
     let kind='grunt';
     if(wave>=3&&roll<0.12) kind='brood';
-    else if(wave>=2&&roll<0.32) kind='shield';
+    else if(wave>=2&&roll<0.28) kind='shield';
+    else if(wave>=2&&roll<0.40) kind='spitter';
     const baseHp=5+wave*3.5;
     const hpv=kind==='brood'?baseHp*3:kind==='shield'?baseHp*1.3:baseHp;
     mons.push({x, y, r:(kind==='brood'?21:15)*U, hp:hpv, maxhp:hpv,
-      vy:(15+wave*1.6)*U*(kind==='brood'?0.6:1), kind,
+      vy:(15+wave*1.6)*U*(kind==='brood'?0.6:1), kind, spitT:rnd(2.5,5),
       boss:false, slowT:0, burn:null, ph:Math.random()*7, dead:false, gnawT:0});
   }
 }
@@ -237,30 +240,15 @@ function damageMon(m,dmg,key){
   if(m.hp<=0) killMon(m);
 }
 
-// ---------- input ----------
-function setAim(x,y){
-  let a=Math.atan2(y-playerY, x-W/2);
-  // clamp to upward arc
-  if(a>-0.15&&a<=Math.PI/2) a=-0.15;
-  else if((a>Math.PI/2&&a<Math.PI)||a<-Math.PI+0.15&&a>=-Math.PI) a=-Math.PI+0.15;
-  aimA=a;
-}
+// ---------- input: drag anywhere to move the launcher ----------
 addEventListener('pointerdown',e=>{
   initAudio();
   if(state==='title'){ startGame(); return; }
   if(state==='over'){ if(tReal-overAt>0.6) startGame(); return; }
-  if(placing&&state==='play'&&e.isPrimary){
-    const x=Math.max(24,Math.min(W-24,e.clientX));
-    const y=Math.max(94,Math.min(lineY-60,e.clientY));
-    pins.push({x,y,kind:placing,ph:Math.random()*7});
-    puff(x,y,10,placing==='bump'?'#ff8ab0':'#7fe8d0',140);
-    beep(330,0.1,'square',0.5,120);
-    placing=null; paused=false; return;
-  }
   if(paused||!e.isPrimary) return;
-  aiming=true; setAim(e.clientX,e.clientY);
+  aiming=true; moveTX=Math.max(24,Math.min(W-24,e.clientX));
 });
-addEventListener('pointermove',e=>{ if(aiming&&e.isPrimary&&!paused) setAim(e.clientX,e.clientY); });
+addEventListener('pointermove',e=>{ if(aiming&&e.isPrimary&&!paused) moveTX=Math.max(24,Math.min(W-24,e.clientX)); });
 addEventListener('pointerup',()=>{ aiming=false; });
 
 // ---------- level ups ----------
@@ -334,7 +322,8 @@ function applyCard(o){
 // ---------- flow ----------
 function startGame(){
   defs={iron:TYPES.iron}; owned=[{key:'iron',lvl:1}]; rateUp=0; surge=0;
-  balls=[];mons=[];gems=[];parts=[];floats=[];zaps=[];pins=[];placing=null;
+  balls=[];mons=[];gems=[];parts=[];floats=[];zaps=[];pins=[];eprojs=[];placing=null;
+  playerX=W/2; moveTX=W/2; playerVX=0;
   score=0;hp=100;wave=1;xp=0;xpNeed=20;tGame=0;rowT=0.5;lastBossWave=0;rotIdx=0;fireT=0.3;
   aimA=-Math.PI/2;shake=0;hurtFlash=0;paused=false;gemChain=0;
   state='play'; $t.classList.add('hidden'); $o.classList.add('hidden'); $lv.classList.add('hidden');
@@ -357,6 +346,15 @@ function hurt(d,x){
 function update(dt){
   tGame+=dt;
   wave=1+Math.floor(tGame/18);
+  // movement: launcher chases the thumb; strafe speed tilts the firing angle
+  {
+    const px0=playerX, maxV=520*U;
+    const dx=moveTX-playerX, mv=Math.min(Math.abs(dx), maxV*dt);
+    playerX+=Math.sign(dx)*mv;
+    const instV=(playerX-px0)/Math.max(dt,1e-4);
+    playerVX+=(instV-playerVX)*Math.min(1,dt*12);
+    aimA=-Math.PI/2+Math.max(-1,Math.min(1,playerVX/maxV))*0.55;
+  }
   if(xp>=xpNeed){ xp-=xpNeed; xpNeed=Math.round(xpNeed*1.3); offerCards(); }
   if(wave%5===0&&lastBossWave!==wave){ lastBossWave=wave; spawnBoss(); }
   rowT-=dt; if(rowT<=0){ spawnRow(); rowT=Math.max(1.7, 3.7-wave*0.15); }
@@ -467,18 +465,38 @@ function update(dt){
       continue;
     }
     m.y+=vy*dt;
+    if(m.kind==='spitter'&&m.y>60&&m.y<lineY-40){
+      m.spitT-=dt;
+      if(m.spitT<=0){
+        m.spitT=rnd(3.5,5.5);
+        const ddx=playerX-m.x, ddy=playerY-m.y, dd=Math.hypot(ddx,ddy)||1, sp=175*U;
+        eprojs.push({x:m.x,y:m.y+m.r,vx:ddx/dd*sp,vy:ddy/dd*sp,dead:false});
+        puff(m.x,m.y+m.r,3,'#8fc9c0',80); beep(260,0.08,'sawtooth',0.3,-60);
+      }
+    }
     if(m.y+m.r>=lineY){
       m.dead=true; puff(m.x,lineY,12,'#ff4d6d',180); hurt(6+Math.floor(wave*0.8), m.x);
     }
   }
   mons=mons.filter(m=>!m.dead);
 
+  // enemy projectiles: dodge them
+  for(const p of eprojs){
+    p.x+=p.vx*dt; p.y+=p.vy*dt;
+    if(p.y>H+20){ p.dead=true; continue; }
+    if(Math.hypot(p.x-playerX,p.y-playerY)<18*U+6){
+      p.dead=true; hurt(Math.round(3+wave*0.6), playerX);
+      puff(playerX,playerY-10,8,'#8fc9c0',150);
+    }
+  }
+  eprojs=eprojs.filter(p=>!p.dead);
+
   // gems
   for(const g of gems){
     g.t-=dt;
     if(g.t>0){ g.x+=g.vx*dt; g.y+=g.vy*dt; g.vy+=300*dt; }
     else {
-      const dx=W/2-g.x, dy=playerY-g.y, d=Math.hypot(dx,dy);
+      const dx=playerX-g.x, dy=playerY-g.y, d=Math.hypot(dx,dy);
       const sp=(600+1200*Math.max(0,1-d/300))*dt;
       if(d<20){ g.dead=true; xp+=g.val; score+=g.val;
         gemChain++; gemChainT=1.8; sGem();
@@ -516,8 +534,8 @@ function draw(){
   // aim guide
   if(state==='play'){
     ctx.strokeStyle='rgba(239,230,216,'+(aiming?0.35:0.15)+')'; ctx.lineWidth=1.5; ctx.setLineDash([2,8]);
-    ctx.beginPath(); ctx.moveTo(W/2,playerY-16);
-    ctx.lineTo(W/2+Math.cos(aimA)*220, playerY-16+Math.sin(aimA)*220); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(playerX,playerY-16);
+    ctx.lineTo(playerX+Math.cos(aimA)*220, playerY-16+Math.sin(aimA)*220); ctx.stroke();
     ctx.setLineDash([]);
   }
 
@@ -558,12 +576,16 @@ function draw(){
   for(const m of mons){
     ctx.save(); ctx.translate(m.x,m.y);
     const wob=Math.sin(m.ph*2)*0.05; ctx.scale(1+wob,1-wob);
-    ctx.fillStyle=m.boss?'#a99175':(m.kind==='brood'?'#b493c9':(m.kind==='imp'?'#d8a5c0':'#cfc3ad'));
+    ctx.fillStyle=m.boss?'#a99175':(m.kind==='brood'?'#b493c9':(m.kind==='imp'?'#d8a5c0':(m.kind==='spitter'?'#8fc9c0':'#cfc3ad')));
     ctx.beginPath(); ctx.arc(0,0,m.r,0,7); ctx.fill();
     ctx.fillStyle=m.boss?'#8a7358':(m.kind==='brood'?'#8e6ba6':'#b3a68c');
     ctx.beginPath(); ctx.arc(0,m.r*0.35,m.r*0.6,0,7); ctx.fill();
     ctx.fillStyle='#1a1420'; const e=m.r*0.28;
     ctx.beginPath(); ctx.arc(-e,e*0.1,e*0.42,0,7); ctx.arc(e,e*0.1,e*0.42,0,7); ctx.fill();
+    if(m.kind==='spitter'){
+      ctx.fillStyle='#1a1420';
+      ctx.beginPath(); ctx.arc(0,m.r*0.55,m.r*0.28,0,7); ctx.fill();
+    }
     if(m.kind==='shield'){
       ctx.strokeStyle='#3b3150'; ctx.lineWidth=5;
       ctx.beginPath(); ctx.arc(0,0,m.r+2,Math.PI*0.18,Math.PI*0.82); ctx.stroke();
@@ -620,9 +642,16 @@ function draw(){
   for(const p of parts){ const a=p.life/p.max; ctx.globalAlpha=a; ctx.fillStyle=p.col;
     ctx.beginPath(); ctx.arc(p.x,p.y,p.r*a+0.5,0,7); ctx.fill(); ctx.globalAlpha=1; }
 
+  // enemy projectiles
+  for(const p of eprojs){
+    ctx.fillStyle='#8fc9c0';
+    ctx.beginPath(); ctx.arc(p.x,p.y,6,0,7); ctx.fill();
+    ctx.globalAlpha=0.3; ctx.beginPath(); ctx.arc(p.x,p.y,10,0,7); ctx.fill(); ctx.globalAlpha=1;
+  }
+
   // player
   if(state!=='over'){
-    ctx.save(); ctx.translate(W/2,playerY);
+    ctx.save(); ctx.translate(playerX,playerY);
     ctx.fillStyle='#3b3150'; ctx.beginPath(); ctx.arc(0,6,16,0,7); ctx.fill();
     ctx.fillStyle='#efe6d8'; ctx.beginPath(); ctx.arc(0,-2,10,0,7); ctx.fill();
     ctx.rotate(aimA+Math.PI/2);
