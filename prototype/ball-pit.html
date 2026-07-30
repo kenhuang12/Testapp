@@ -46,9 +46,9 @@
 <div id="title" class="overlay">
   <div class="eyebrow">Playable Prototype Nº3</div>
   <h1>Pit&nbsp;Fall</h1>
-  <div class="rules"><b>Hold and drag to aim.</b> Your balls fire themselves,
-    ricochet off the walls, and shred the monsters marching down.
-    Collect the gems. Level up. <b>Fuse two maxed balls into something worse.</b></div>
+  <div class="rules"><b>Hold and drag to aim.</b> Every wall bounce makes a ball
+    hit harder. Slip through the gaps in the ranks — <b>balls striking from
+    above deal bonus damage.</b> Level up and fuse maxed balls into monsters.</div>
   <div class="cta">Tap to descend</div>
 </div>
 
@@ -162,25 +162,31 @@ function fireBall(){
   for(let i=0;i<count;i++){
     const off=(i-(count-1)/2)*0.10;
     balls.push({x:W/2, y:playerY-16, vx:Math.cos(aimA+off)*sp, vy:Math.sin(aimA+off)*sp,
-      key:slot.key, r:(d.big?11:7)*U, life:4.6, cd:0, pinCd:0, heat:0, isSplit:false, dead:false,
+      key:slot.key, r:(d.big?11:7)*U, life:4.6, cd:0, pinCd:0, heat:0, behind:false, isSplit:false, dead:false,
       trail:[]});
   }
   sFire();
 }
 function ballDmg(b){ const slot=owned.find(s=>s.key===b.key), d=defs[b.key];
-  return d.base*mult(slot?slot.lvl:1)*(1+0.25*surge)*(1+0.22*Math.min(6,b.heat||0)); }
+  return d.base*mult(slot?slot.lvl:1)*(1+0.25*surge)*(1+0.15*Math.min(8,b.heat||0)); }
 
 // ---------- monsters ----------
 function spawnRow(){
-  const n=Math.min(6, 2+Math.floor(wave/2)+(Math.random()<0.4?1:0));
-  const cols=[...Array(7).keys()];
-  for(let i=cols.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[cols[i],cols[j]]=[cols[j],cols[i]];}
-  for(let i=0;i<n;i++){
-    const lane=cols[i], x=W*(0.1+0.8*lane/6)+rnd(-8,8);
-    const brood=wave>=3&&Math.random()<0.15;
-    const hpv=brood?(6+wave*4)*3:6+wave*4;
-    mons.push({x, y:rnd(-60,-20), r:(brood?21:15)*U, hp:hpv, maxhp:hpv,
-      vy:(15+wave*1.6)*U*(brood?0.6:1), kind:brood?'brood':'grunt',
+  // a dense rank with 1-2 gaps: the gaps are the routes behind enemy lines
+  const lanes=7, gapCount=1+(Math.random()<0.5?1:0);
+  const gaps=new Set(); while(gaps.size<gapCount) gaps.add(Math.floor(Math.random()*lanes));
+  const y=rnd(-46,-26);
+  for(let lane=0;lane<lanes;lane++){
+    if(gaps.has(lane)) continue;
+    const x=W*(0.08+0.84*lane/6)+rnd(-4,4);
+    const roll=Math.random();
+    let kind='grunt';
+    if(wave>=3&&roll<0.12) kind='brood';
+    else if(wave>=2&&roll<0.32) kind='shield';
+    const baseHp=5+wave*3.5;
+    const hpv=kind==='brood'?baseHp*3:kind==='shield'?baseHp*1.3:baseHp;
+    mons.push({x, y, r:(kind==='brood'?21:15)*U, hp:hpv, maxhp:hpv,
+      vy:(15+wave*1.6)*U*(kind==='brood'?0.6:1), kind,
       boss:false, slowT:0, burn:null, ph:Math.random()*7, dead:false, gnawT:0});
   }
 }
@@ -353,19 +359,29 @@ function update(dt){
   wave=1+Math.floor(tGame/18);
   if(xp>=xpNeed){ xp-=xpNeed; xpNeed=Math.round(xpNeed*1.3); offerCards(); }
   if(wave%5===0&&lastBossWave!==wave){ lastBossWave=wave; spawnBoss(); }
-  rowT-=dt; if(rowT<=0){ spawnRow(); rowT=Math.max(1.4, 3.4-wave*0.16); }
+  rowT-=dt; if(rowT<=0){ spawnRow(); rowT=Math.max(1.7, 3.7-wave*0.15); }
   fireT-=dt; if(fireT<=0){ fireBall(); fireT=0.42/(1+0.15*rateUp); }
   gemChainT-=dt; if(gemChainT<=0) gemChain=0;
 
   // balls
+  let topY=Infinity;
+  for(const m of mons) if(!m.dead&&!m.boss) topY=Math.min(topY,m.y);
   const newSplits=[];
   for(const b of balls){
     b.cd-=dt; b.life-=dt; b.pinCd-=dt;
     b.trail.unshift([b.x,b.y]); if(b.trail.length>6)b.trail.pop();
     b.x+=b.vx*dt; b.y+=b.vy*dt;
-    if(b.x<b.r){ b.x=b.r; b.vx=Math.abs(b.vx); }
-    if(b.x>W-b.r){ b.x=W-b.r; b.vx=-Math.abs(b.vx); }
-    if(b.y<b.r+4){ b.y=b.r+4; b.vy=Math.abs(b.vy); }
+    let bounced=false;
+    if(b.x<b.r){ b.x=b.r; b.vx=Math.abs(b.vx); bounced=true; }
+    if(b.x>W-b.r){ b.x=W-b.r; b.vx=-Math.abs(b.vx); bounced=true; }
+    if(b.y<b.r+4){ b.y=b.r+4; b.vy=Math.abs(b.vy); bounced=true; }
+    if(bounced){ b.heat=Math.min(8,(b.heat||0)+1); puff(b.x,b.y,2,'#efe6d8',60);
+      beep(140+b.heat*30,0.03,'sine',0.15); }
+    if(!b.behind&&topY<Infinity&&b.y<topY-14){
+      b.behind=true;
+      if(Math.random()<0.5) float(b.x,b.y,'BEHIND LINES','#5ce8a4',11);
+      beep(880,0.06,'triangle',0.3);
+    }
     if(b.y>H+20||b.life<=0){ b.dead=true; continue; }
     if(b.pinCd<=0) for(const pin of pins){
       const pr=(pin.kind==='bump'?12:9)*U;
@@ -403,7 +419,13 @@ function update(dt){
           b.cd=0.09; beep(180,0.05,'square',0.35);
           break;
         }
-        damageMon(m, ballDmg(b), b.key); sHit();
+        let dirMult=1;
+        if(b.vy>0) dirMult=1.6;                       // plunging fire from above
+        if(m.kind==='shield'&&b.vy<=0){ dirMult=0.25; // armored front blocks head-on shots
+          if(Math.random()<0.35) float(b.x,b.y,'BLOCKED','#8f8499',11);
+          beep(180,0.04,'square',0.3); }
+        damageMon(m, ballDmg(b)*dirMult, b.key); sHit();
+        if(dirMult>1.4&&Math.random()<0.3) float(b.x,b.y-10,'BACKSTAB!','#ffd23f',12);
         puff(b.x,b.y,3,defs[b.key].hex,100);
         const P=defs[b.key].props;
         if(!P.pierce){
@@ -542,6 +564,12 @@ function draw(){
     ctx.beginPath(); ctx.arc(0,m.r*0.35,m.r*0.6,0,7); ctx.fill();
     ctx.fillStyle='#1a1420'; const e=m.r*0.28;
     ctx.beginPath(); ctx.arc(-e,e*0.1,e*0.42,0,7); ctx.arc(e,e*0.1,e*0.42,0,7); ctx.fill();
+    if(m.kind==='shield'){
+      ctx.strokeStyle='#3b3150'; ctx.lineWidth=5;
+      ctx.beginPath(); ctx.arc(0,0,m.r+2,Math.PI*0.18,Math.PI*0.82); ctx.stroke();
+      ctx.strokeStyle='#8f8499'; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.arc(0,0,m.r+4.5,Math.PI*0.22,Math.PI*0.78); ctx.stroke();
+    }
     if(m.boss){
       if(m.open){
         ctx.fillStyle='#241018';
