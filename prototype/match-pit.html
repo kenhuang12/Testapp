@@ -5,7 +5,8 @@
     --bg:#120e1a; --stone:#2a2338; --bone:#efe6d8; --ember:#ff7a3c;
     --magma:#ff4d6d; --dim:#8f8499;
   }
-  html,body{margin:0;padding:0;height:100%;background:var(--bg);overflow:hidden;
+  html,body{margin:0;padding:0;position:fixed;inset:0;width:100%;height:100%;
+    background:var(--bg);overflow:hidden;overscroll-behavior:none;
     font-family:"Arial Narrow","Avenir Next Condensed","Helvetica Neue",Arial,sans-serif;
     -webkit-user-select:none;user-select:none;touch-action:none}
   #c{position:fixed;inset:0;display:block;touch-action:none}
@@ -28,7 +29,6 @@
   @keyframes pulse{0%,100%{opacity:.55}50%{opacity:1}}
   @media (prefers-reduced-motion: reduce){.cta{animation:none}}
 
-  /* level-up cards */
   #levelup .cards{display:flex;flex-direction:column;gap:12px;width:min(88vw,340px)}
   .card{background:#1c1729;border:1px solid #3b3150;border-left:5px solid var(--ember);
     color:var(--bone);text-align:left;padding:14px 16px;font:inherit;cursor:pointer;
@@ -44,11 +44,11 @@
 <canvas id="c"></canvas>
 
 <div id="title" class="overlay">
-  <div class="eyebrow">Playable Prototype Nº2</div>
+  <div class="eyebrow">Playable Prototype Nº2 · Rev B</div>
   <h1>Match&nbsp;Pit</h1>
-  <div class="rules">Monsters descend the columns. <b>Swap gems to match 3</b> —
-    matches fire up their own column. Level up, <b>fuse two gem types into one</b>,
-    and hold the line. Three breaches and the pit wins.</div>
+  <div class="rules">Monsters strike on a timer. <b>Match 3</b> to hit whichever one
+    is about to attack. <b>Match 4</b> forges a Blast gem, <b>match 5</b> a Prism.
+    Level up and <b>fuse two gem types into one</b>. Outlast the waves.</div>
   <div class="cta">Tap to fight</div>
 </div>
 
@@ -73,6 +73,10 @@
   if(!m){ m=document.createElement('meta'); m.name='viewport'; document.head.appendChild(m); }
   m.content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
 }
+// kill page scroll / pull-to-refresh / pinch on mobile
+document.addEventListener('touchmove', e=>e.preventDefault(), {passive:false});
+document.addEventListener('gesturestart', e=>e.preventDefault());
+
 const cv=document.getElementById('c'), ctx=cv.getContext('2d');
 const $t=document.getElementById('title'), $o=document.getElementById('over'),
       $lv=document.getElementById('levelup'), $cards=document.getElementById('cardbox');
@@ -80,7 +84,7 @@ const reduceMotion=matchMedia('(prefers-reduced-motion: reduce)').matches;
 const rnd=(a,b)=>a+Math.random()*(b-a);
 
 // ---------- layout ----------
-const CO=7, RO=6; // board columns x rows
+const CO=7, RO=6;
 let W,H,DPR,cell,boardX,boardTop,fieldTop;
 function resize(){
   DPR=Math.min(devicePixelRatio||1,2.5);
@@ -90,34 +94,33 @@ function resize(){
   cell=Math.min((W-14)/CO, (H*0.42)/RO, 64);
   boardX=(W-cell*CO)/2;
   boardTop=H-cell*RO-10;
-  fieldTop=64;
+  fieldTop=70;
 }
 addEventListener('resize',resize);
 addEventListener('orientationchange',()=>setTimeout(resize,250));
 if(window.visualViewport) visualViewport.addEventListener('resize',resize);
 resize(); setTimeout(resize,100);
-
 const gx=c=>boardX+cell*(c+0.5), gy=r=>boardTop+cell*(r+0.5);
-const laneX=c=>gx(c);
 
 // ---------- colors / build ----------
 const BASE={
   fire :{name:'FIRE',  hex:'#ff6b4a', dk:'#b23a24', base:13, shape:'diamond', props:{}},
-  frost:{name:'FROST', hex:'#58c7ff', dk:'#2b7fb0', base:8,  shape:'circle',  props:{slow:2}},
+  frost:{name:'FROST', hex:'#58c7ff', dk:'#2b7fb0', base:8,  shape:'circle',  props:{slow:2.5}},
   volt :{name:'VOLT',  hex:'#ffd23f', dk:'#b28e14', base:7,  shape:'triangle',props:{chain:2}},
   venom:{name:'VENOM', hex:'#5ce8a4', dk:'#2a9c66', base:6,  shape:'square',  props:{poison:4}},
 };
 const FUSE={
   'fire+frost':{name:'STEAM',  hex:'#cfe8ff', dk:'#7fa8c9'},
-  'fire+volt' :{name:'PLASMA', hex:'#ffb14a', dk:'#c07c1e', extra:{pierce:1}},
+  'fire+volt' :{name:'PLASMA', hex:'#ffb14a', dk:'#c07c1e', extra:{splash:1}},
   'fire+venom':{name:'NAPALM', hex:'#ff8a3c', dk:'#c05a18', extra:{splash:1}},
   'frost+volt':{name:'STATIC', hex:'#a9d9ff', dk:'#6f9cc4'},
   'frost+venom':{name:'CRYOTOX',hex:'#7fe8d0', dk:'#3fa892'},
   'venom+volt':{name:'PLAGUE ARC',hex:'#c9f04d', dk:'#8aa826'},
 };
-let colors={}, lvl={}, surge=0, chill=0; // active color defs, per-color level, global stacks
-
+const PRISM={name:'PRISM', hex:'#f6f2ff', dk:'#9a90c9', base:16, shape:'hex', props:{}};
+let colors={}, lvl={}, surge=0, chill=0;
 function activeList(){ return Object.keys(colors); }
+function colDef(cn){ return cn==='prism'?PRISM:colors[cn]; }
 function makeFusion(a,b){
   const key=[a,b].sort().join('+'), f=FUSE[key]; if(!f) return null;
   const A=colors[a], B=colors[b];
@@ -126,10 +129,10 @@ function makeFusion(a,b){
 }
 
 // ---------- state ----------
-let state='title', grid=[], busy=false, swapping=null, resolveT=0, combo=0;
+let state='title', grid=[], busy=false, swapping=null, resolveT=0, combo=0, pendSwapCell=null;
 let mons=[], projs=[], parts=[], floats=[], zaps=[];
-let score=0,best=0,hearts=3,wave=1,level=1,xp=0,xpNeed=25,tGame=0,tReal=0;
-let spawnT=1.5,nextBoss=45,shake=0,hurtFlash=0,paused=false,overAt=0;
+let score=0,best=0,hp=100,wave=0,level=1,xp=0,xpNeed=25,tReal=0;
+let waveDelay=0,shake=0,hurtFlash=0,paused=false,overAt=0;
 try{ best=+localStorage.getItem('matchpit_best')||0; }catch(e){}
 const specks=[]; for(let i=0;i<60;i++) specks.push([Math.random(),Math.random(),Math.random()]);
 
@@ -145,28 +148,28 @@ function beep(f,dur,type,vol,slide){ if(!AC)return;
   g.gain.setValueAtTime((vol||1)*0.5,t0); g.gain.exponentialRampToValueAtTime(0.001,t0+dur);
   o.connect(g);g.connect(master);o.start(t0);o.stop(t0+dur+0.02); }
 const PENTA=[392,440,523,587,659,784,880,1047];
-const sPop=c=>{beep(PENTA[Math.min(c,7)],0.14,'triangle',0.9);};
+const sPop=c=>beep(PENTA[Math.min(c,7)],0.14,'triangle',0.9);
 const sSwap=()=>beep(220,0.05,'sine',0.3);
 const sBad=()=>beep(120,0.09,'sine',0.4,-40);
 const sKill=()=>{beep(560,0.12,'square',0.4,-260);beep(85,0.1,'sine',0.7);};
-const sHurt=()=>beep(150,0.3,'sawtooth',0.8,-70);
+const sHurt=()=>beep(150,0.28,'sawtooth',0.8,-70);
 const sLvl=()=>{beep(523,0.12,'triangle',0.8);setTimeout(()=>beep(784,0.2,'triangle',0.8),110);};
 const sFuse=()=>{beep(392,0.15,'triangle',0.9);setTimeout(()=>beep(587,0.15,'triangle',0.9),130);
   setTimeout(()=>beep(880,0.3,'triangle',1),260);};
 const sBoss=()=>beep(55,0.6,'sawtooth',0.9,12);
+const sPow=()=>{beep(659,0.1,'triangle',0.9);setTimeout(()=>beep(988,0.22,'triangle',0.9),90);};
 
-// ---------- fx helpers ----------
+// ---------- fx ----------
 function puff(x,y,n,col,pow){ for(let i=0;i<n;i++){ const a=Math.random()*6.283,s=rnd(40,pow||170);
   parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-30,r:rnd(2,5),life:rnd(.3,.7),max:.7,col}); } }
 function float(x,y,txt,col,size){ floats.push({x,y,txt,col,size:size||14,life:1}); }
 function addShake(v){ shake+=v*(reduceMotion?0.25:1); }
 
 // ---------- board ----------
-function newGem(cn,c,r,above){ return {cn,px:gx(c),py:above!=null?above:gy(r)}; }
+function newGem(cn,c,r,above){ return {cn,pw:null,px:gx(c),py:above!=null?above:gy(r)}; }
 function randColor(){ const a=activeList(); return a[Math.floor(Math.random()*a.length)]; }
 function fillBoard(){
   grid=[]; for(let r=0;r<RO;r++){ grid.push([]); for(let c=0;c<CO;c++) grid[r].push(newGem(randColor(),c,r)); }
-  // clear initial matches by rerolling
   let guard=0;
   while(findRuns().length&&guard++<200){
     for(const run of findRuns()) for(const [r,c] of run.cells) grid[r][c].cn=randColor();
@@ -177,15 +180,16 @@ function findRuns(){
   const runs=[];
   for(let r=0;r<RO;r++){ let c=0; while(c<CO){ let c2=c; const cn=grid[r][c]&&grid[r][c].cn;
     while(cn&&c2<CO&&grid[r][c2]&&grid[r][c2].cn===cn)c2++;
-    if(cn&&c2-c>=3){ const cells=[]; for(let k=c;k<c2;k++)cells.push([r,k]); runs.push({cn,cells,len:c2-c}); }
+    if(cn&&cn!=='prism'&&c2-c>=3){ const cells=[]; for(let k=c;k<c2;k++)cells.push([r,k]); runs.push({cn,cells,len:c2-c}); }
     c=Math.max(c2,c+1); } }
   for(let c=0;c<CO;c++){ let r=0; while(r<RO){ let r2=r; const cn=grid[r][c]&&grid[r][c].cn;
     while(cn&&r2<RO&&grid[r2][c]&&grid[r2][c].cn===cn)r2++;
-    if(cn&&r2-r>=3){ const cells=[]; for(let k=r;k<r2;k++)cells.push([k,c]); runs.push({cn,cells,len:r2-r}); }
+    if(cn&&cn!=='prism'&&r2-r>=3){ const cells=[]; for(let k=r;k<r2;k++)cells.push([k,c]); runs.push({cn,cells,len:r2-r}); }
     r=Math.max(r2,r+1); } }
   return runs;
 }
 function movesExist(){
+  for(let r=0;r<RO;r++)for(let c=0;c<CO;c++) if(grid[r][c]&&grid[r][c].pw==='prism') return true;
   const trySwap=(r1,c1,r2,c2)=>{ const a=grid[r1][c1],b=grid[r2][c2];
     grid[r1][c1]=b;grid[r2][c2]=a; const ok=findRuns().length>0; grid[r1][c1]=a;grid[r2][c2]=b; return ok; };
   for(let r=0;r<RO;r++)for(let c=0;c<CO;c++){
@@ -194,35 +198,78 @@ function movesExist(){
   return false;
 }
 function shuffleBoard(){
-  const all=[]; for(let r=0;r<RO;r++)for(let c=0;c<CO;c++)all.push(grid[r][c].cn);
+  const all=[]; for(let r=0;r<RO;r++)for(let c=0;c<CO;c++)all.push({cn:grid[r][c].cn,pw:grid[r][c].pw});
   let guard=0;
   do{ for(let i=all.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[all[i],all[j]]=[all[j],all[i]];}
-      let k=0; for(let r=0;r<RO;r++)for(let c=0;c<CO;c++)grid[r][c].cn=all[k++];
+      let k=0; for(let r=0;r<RO;r++)for(let c=0;c<CO;c++){grid[r][c].cn=all[k].cn;grid[r][c].pw=all[k].pw;k++;}
   }while((findRuns().length||!movesExist())&&guard++<300);
   float(W/2,boardTop-20,'RESHUFFLE','#8f8499',16);
 }
-function settleStep(dt){ // move gems toward targets; return true if all settled
+function settleStep(dt){
   let done=true; const sp=cell*16*dt;
   for(let r=0;r<RO;r++)for(let c=0;c<CO;c++){ const g=grid[r][c]; if(!g)continue;
-    const tx=gx(c),ty=gy(r);
-    const dx=tx-g.px,dy=ty-g.py,d=Math.hypot(dx,dy);
+    const tx=gx(c),ty=gy(r), dx=tx-g.px,dy=ty-g.py,d=Math.hypot(dx,dy);
     if(d>1){ done=false; const m=Math.min(d,sp); g.px+=dx/d*m; g.py+=dy/d*m; } else {g.px=tx;g.py=ty;} }
   return done;
 }
+
+// clear-set machinery: power gems expand what gets cleared
+const key=(r,c)=>r*CO+c;
+function expandPower(clear){
+  const q=[...clear.keys()];
+  while(q.length){
+    const k=q.shift(), r=Math.floor(k/CO), c=k%CO, g=grid[r][c];
+    if(!g) continue;
+    if(g.pw==='blast'){
+      g.pw=null; sPow(); addShake(5);
+      for(let cc=0;cc<CO;cc++) if(!clear.has(key(r,cc))&&grid[r][cc]){ clear.set(key(r,cc),1); q.push(key(r,cc)); }
+      for(let rr=0;rr<RO;rr++) if(!clear.has(key(rr,c))&&grid[rr][c]){ clear.set(key(rr,c),1); q.push(key(rr,c)); }
+    } else if(g.pw==='prism'){
+      g.pw=null; sPow(); addShake(7);
+      const act=activeList(), pick=act[Math.floor(Math.random()*act.length)];
+      for(let rr=0;rr<RO;rr++)for(let cc=0;cc<CO;cc++)
+        if(grid[rr][cc]&&grid[rr][cc].cn===pick&&!clear.has(key(rr,cc))){ clear.set(key(rr,cc),1); q.push(key(rr,cc)); }
+    }
+  }
+}
+function fireCells(clear){
+  const comboMult=1+0.25*(combo-1);
+  let i=0;
+  for(const [k,mult] of clear){
+    const r=Math.floor(k/CO), c=k%CO, g=grid[r][c]; if(!g) continue;
+    const cd=colDef(g.cn);
+    const clv=g.cn==='prism'?3:(lvl[g.cn]||1);
+    const dmg=cd.base*(1+0.5*(clv-1))*(1+0.25*surge)*mult*comboMult;
+    projs.push({x:g.px,y:g.py,cn:g.cn,dmg,delay:i*0.035,target:null,dead:false});
+    puff(g.px,g.py,5,cd.hex,120);
+    grid[r][c]=null; score+=Math.round(2*mult*comboMult); i++;
+  }
+}
 function popRuns(runs){
   combo++;
-  const mult=(1+0.25*(combo-1));
+  const clear=new Map(); const powered=[];
   for(const run of runs){
     const lenB=run.len>=5?2.6:run.len===4?1.8:1;
-    for(let i=0;i<run.cells.length;i++){
-      const [r,c]=run.cells[i], g=grid[r][c]; if(!g)continue;
-      const col=colors[run.cn];
-      const dmg=col.base*(1+0.5*((lvl[run.cn]||1)-1))*(1+0.25*surge)*lenB*mult;
-      projs.push({lane:c,x:gx(c),y:g.py,vy:-(H*1.1),cn:run.cn,dmg,delay:i*0.045});
-      puff(g.px,g.py,6,col.hex,120);
-      grid[r][c]=null;
-      score+=Math.round(2*lenB*mult);
+    let keep=null;
+    if(run.len>=4){
+      keep=run.cells.find(([r,c])=>pendSwapCell&&r===pendSwapCell.r&&c===pendSwapCell.c)
+        || run.cells[Math.floor(run.cells.length/2)];
+      powered.push({r:keep[0],c:keep[1],pw:run.len>=5?'prism':'blast',cn:run.cn});
     }
+    for(const [r,c] of run.cells){
+      if(keep&&r===keep[0]&&c===keep[1]) continue;
+      if(!clear.has(key(r,c))||clear.get(key(r,c))<lenB) clear.set(key(r,c),lenB);
+    }
+  }
+  pendSwapCell=null;
+  expandPower(clear);
+  // don't clear cells that are becoming power gems
+  for(const p of powered) clear.delete(key(p.r,p.c));
+  fireCells(clear);
+  for(const p of powered){ const g=grid[p.r][p.c]; if(!g) continue;
+    g.pw=p.pw; if(p.pw==='prism') g.cn='prism';
+    puff(g.px,g.py,10,p.pw==='prism'?'#f6f2ff':colDef(g.cn).hex,160);
+    float(g.px,g.py-16,p.pw==='prism'?'PRISM!':'BLAST!',p.pw==='prism'?'#f6f2ff':colDef(g.cn).hex,15);
   }
   sPop(Math.min(combo-1,7));
   if(combo>=2) float(W/2, boardTop-26, 'CHAIN ×'+combo, '#ff7a3c', 20);
@@ -236,44 +283,83 @@ function gravity(){
     for(;r>=0;r--){ grid[r][c]=newGem(randColor(),c,r, boardTop-cell*(above++)+cell*0.5-cell); }
   }
 }
+function activatePrism(pr,pc,or_,oc){
+  combo=1;
+  const other=grid[or_][oc], clear=new Map();
+  clear.set(key(pr,pc),1.5);
+  if(other.pw==='prism'){
+    for(let r=0;r<RO;r++)for(let c=0;c<CO;c++) if(grid[r][c]) clear.set(key(r,c),1.5);
+  } else {
+    for(let r=0;r<RO;r++)for(let c=0;c<CO;c++)
+      if(grid[r][c]&&grid[r][c].cn===other.cn) clear.set(key(r,c),1.5);
+  }
+  grid[pr][pc].pw=null; // consumed, not re-expanded
+  expandPower(clear);
+  fireCells(clear);
+  sPow(); addShake(8);
+  busy=true; swapping=null; resolveT=0.15; gravity();
+}
 function transmute(a,b,toCn){
   for(let r=0;r<RO;r++)for(let c=0;c<CO;c++){ const g=grid[r][c];
     if(g&&(g.cn===a||g.cn===b)){ g.cn=toCn; puff(g.px,g.py,4,colors[toCn].hex,90); } }
-  busy=true; resolveT=0.25; // let the transmute cascade
+  busy=true; resolveT=0.25;
 }
 
-// ---------- combat ----------
-function spawnMon(boss){
-  const lane=Math.floor(Math.random()*(boss?CO-1:CO));
-  const hp=boss?140+wave*40:10+wave*6;
-  mons.push({lane,wid:boss?2:1,y:fieldTop,hp,maxhp:hp,boss:!!boss,
-    spd:(boss?9:15+wave*1.8),slow:0,poison:null,ph:Math.random()*7,dead:false});
-  if(boss){ addShake(14); sBoss(); float(W/2,fieldTop+40,'BOSS','#ff4d6d',26); }
+// ---------- monsters ----------
+function frontMon(){
+  let f=null;
+  for(const m of mons){ if(m.dead||!m.arrived) continue;
+    if(!f||m.atkT<f.atkT) f=m; }
+  if(!f) for(const m of mons){ if(!m.dead){ f=m; break; } }
+  return f;
 }
-function monX(m){ return m.wid===2?(laneX(m.lane)+laneX(m.lane+1))/2:laneX(m.lane); }
-function monR(m){ return (m.boss?0.85:0.36)*cell; }
-function inLane(m,lane){ return lane>=m.lane&&lane<m.lane+m.wid; }
+function spawnWave(){
+  wave++;
+  const boss=wave%5===0;
+  const n=boss?2:Math.min(6, 2+Math.ceil(wave/2));
+  const y0=fieldTop+44;
+  const list=[];
+  if(boss) list.push({boss:true});
+  for(let i=0;i<n;i++) list.push({boss:false});
+  const cnt=list.length;
+  list.forEach((e,i)=>{
+    const x=W*((i+1)/(cnt+1));
+    const hpv=e.boss?110+wave*35:12+wave*7;
+    mons.push({x, y:-50, ty:y0+(i%2)*30+(e.boss?10:0), r:(e.boss?0.8:0.38)*cell,
+      hp:hpv,maxhp:hpv, boss:e.boss, arrived:false,
+      atkMax:e.boss?6:Math.max(2.4,5.2-0.15*wave), atkT:0,
+      dmg:e.boss?18+2*wave:Math.round(4+wave*1.1),
+      slow:0, poison:null, ph:Math.random()*7, dead:false, lunge:0});
+    mons[mons.length-1].atkT=mons[mons.length-1].atkMax*rnd(0.8,1.3);
+  });
+  if(boss){ sBoss(); addShake(10); float(W/2,fieldTop+30,'BOSS WAVE','#ff4d6d',24); }
+  else float(W/2,fieldTop+30,'WAVE '+wave,'rgba(239,230,216,0.6)',18);
+}
 function hitMon(m,dmg,cn){
-  m.hp-=dmg; float(monX(m),m.y-monR(m)-6,'-'+Math.round(dmg),colors[cn]?colors[cn].hex:'#ffd23f',13);
-  const P=colors[cn]?colors[cn].props:{};
+  m.hp-=dmg;
+  const cd=colDef(cn);
+  float(m.x+rnd(-8,8),m.y-m.r-8,'-'+Math.round(dmg),cd?cd.hex:'#ffd23f',13);
+  const P=cd&&cd.props?cd.props:{};
   if(P.slow) m.slow=Math.max(m.slow,P.slow);
   if(P.poison) m.poison={dps:P.poison*(1+0.25*surge),t:3};
+  checkDead(m);
+}
+function checkDead(m){
   if(m.hp<=0&&!m.dead){ m.dead=true;
-    const pts=30+8*wave+(m.boss?300:0); score+=pts; xp+=(m.boss?20:4+wave);
-    float(monX(m),m.y,'+'+pts,'#5ce8a4',m.boss?22:14);
-    puff(monX(m),m.y,m.boss?30:10,'#cfc3ad'); sKill(); if(m.boss)addShake(10); }
+    const pts=30+8*wave+(m.boss?300:0); score+=pts; xp+=(m.boss?25:4+wave);
+    float(m.x,m.y,'+'+pts,'#5ce8a4',m.boss?22:14);
+    puff(m.x,m.y,m.boss?30:10,'#cfc3ad'); sKill(); if(m.boss)addShake(10); }
 }
 function applyHit(p,m){
   hitMon(m,p.dmg,p.cn);
-  const P=colors[p.cn]?colors[p.cn].props:{};
+  const cd=colDef(p.cn), P=cd&&cd.props?cd.props:{};
   if(P.chain){ const others=mons.filter(o=>!o.dead&&o!==m)
-      .sort((a,b)=>Math.hypot(monX(a)-monX(m),a.y-m.y)-Math.hypot(monX(b)-monX(m),b.y-m.y))
-      .slice(0,P.chain);
+      .sort((a,b)=>Math.hypot(a.x-m.x,a.y-m.y)-Math.hypot(b.x-m.x,b.y-m.y)).slice(0,P.chain);
     for(const o of others){ hitMon(o,p.dmg*0.6,p.cn);
-      zaps.push({x1:monX(m),y1:m.y,x2:monX(o),y2:o.y,life:0.18}); } }
-  if(P.splash){ for(const o of mons){ if(!o.dead&&o!==m&&Math.abs(o.lane-m.lane)<=1&&Math.abs(o.y-m.y)<cell*2)
+      zaps.push({x1:m.x,y1:m.y,x2:o.x,y2:o.y,life:0.18}); } }
+  if(P.splash){ for(const o of mons){ if(!o.dead&&o!==m&&Math.hypot(o.x-m.x,o.y-m.y)<cell*2.2)
       hitMon(o,p.dmg*0.6,p.cn); } }
-  puff(p.x,m.y,8,colors[p.cn].hex,140);
+  puff(p.x,p.y,8,cd?cd.hex:'#fff',140);
 }
 
 // ---------- input ----------
@@ -301,34 +387,32 @@ addEventListener('pointermove',e=>{
 addEventListener('pointerup',()=>{ drag=null; });
 
 function doSwap(r1,c1,r2,c2){
-  const a=grid[r1][c1],b=grid[r2][c2];
+  const a=grid[r1][c1], b=grid[r2][c2];
+  if(!a||!b) return;
+  if(a.pw==='prism'){ activatePrism(r1,c1,r2,c2); sSwap(); return; }
+  if(b.pw==='prism'){ activatePrism(r2,c2,r1,c1); sSwap(); return; }
   grid[r1][c1]=b; grid[r2][c2]=a;
   const ok=findRuns().length>0;
+  if(ok) pendSwapCell={r:r2,c:c2};
   busy=true; swapping={r1,c1,r2,c2,ok,phase:0}; sSwap();
-  if(!ok){ /* will revert after gems arrive */ }
 }
 
 // ---------- level ups ----------
 function offerCards(){
   paused=true; $cards.innerHTML='';
-  const opts=[];
-  const act=activeList();
-  // fusion offers first — they're the point
+  const opts=[]; const act=activeList();
   for(let i=0;i<act.length;i++)for(let j=i+1;j<act.length;j++){
     const a=act[i],b=act[j];
     if((lvl[a]||1)>=3&&(lvl[b]||1)>=3&&!colors[a].fused&&!colors[b].fused){
-      const f=makeFusion(a,b); if(f) opts.push({t:'fuse',a,b,f});
-    } }
-  for(const c of act) if((lvl[c]||1)<3&&!colors[c].fused)
-    opts.push({t:'up',c});
-  if(hearts<3) opts.push({t:'heal'});
+      const f=makeFusion(a,b); if(f) opts.push({t:'fuse',a,b,f}); } }
+  for(const c of act) if((lvl[c]||1)<3&&!colors[c].fused) opts.push({t:'up',c});
+  if(hp<70) opts.push({t:'heal'});
   if(surge<4) opts.push({t:'surge'});
   if(chill<3) opts.push({t:'chill'});
-  // pick 3: keep at most 1 fusion, then shuffle rest
   const fuses=opts.filter(o=>o.t==='fuse'), rest=opts.filter(o=>o.t!=='fuse');
   for(let i=rest.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[rest[i],rest[j]]=[rest[j],rest[i]];}
   const picks=(fuses.length?[fuses[Math.floor(Math.random()*fuses.length)]]:[]).concat(rest).slice(0,3);
-  if(!picks.length){ score+=100; float(W/2,H/2,'+100','#5ce8a4',20); paused=false; return; }
+  if(!picks.length){ score+=100; hp=Math.min(100,hp+10); paused=false; return; }
   for(const o of picks){
     const btn=document.createElement('button'); btn.className='card'+(o.t==='fuse'?' fuse':'');
     let nm='',ds='';
@@ -337,9 +421,9 @@ function offerCards(){
       btn.style.borderLeftColor=colors[o.c].hex; }
     if(o.t==='fuse'){ nm='FUSE → '+o.f.name;
       ds=colors[o.a].name+' + '+colors[o.b].name+' become one gem. Fewer colors, easier matches, both powers in every shot.'; }
-    if(o.t==='heal'){ nm='MEND'; ds='Restore one heart.'; btn.style.borderLeftColor='#ff4d6d'; }
+    if(o.t==='heal'){ nm='MEND'; ds='Restore 35 health.'; btn.style.borderLeftColor='#ff4d6d'; }
     if(o.t==='surge'){ nm='SURGE'; ds='All damage +25%.'; }
-    if(o.t==='chill'){ nm='DREAD'; ds='All monsters descend 12% slower.'; btn.style.borderLeftColor='#58c7ff'; }
+    if(o.t==='chill'){ nm='DREAD'; ds='Monster attacks charge 12% slower.'; btn.style.borderLeftColor='#58c7ff'; }
     btn.innerHTML='<div class="cname">'+nm+'</div><div class="cdesc">'+ds+'</div>';
     btn.onclick=()=>{ applyCard(o); $lv.classList.add('hidden'); paused=false; };
     $cards.appendChild(btn);
@@ -348,14 +432,14 @@ function offerCards(){
 }
 function applyCard(o){
   if(o.t==='up') lvl[o.c]=(lvl[o.c]||1)+1;
-  if(o.t==='heal') hearts=Math.min(3,hearts+1);
+  if(o.t==='heal') hp=Math.min(100,hp+35);
   if(o.t==='surge') surge++;
   if(o.t==='chill') chill++;
   if(o.t==='fuse'){
-    const key=o.f.name.toLowerCase().replace(/\s/g,'');
+    const k=o.f.name.toLowerCase().replace(/\s/g,'');
     delete colors[o.a]; delete colors[o.b]; delete lvl[o.a]; delete lvl[o.b];
-    colors[key]=o.f; lvl[key]=3;
-    transmute(o.a,o.b,key); sFuse(); addShake(8);
+    colors[k]=o.f; lvl[k]=3;
+    transmute(o.a,o.b,k); sFuse(); addShake(8);
     float(W/2,boardTop-40,o.f.name+'!',o.f.hex,26);
   }
 }
@@ -366,9 +450,9 @@ function startGame(){
           volt:Object.assign({},BASE.volt),venom:Object.assign({},BASE.venom)};
   lvl={fire:1,frost:1,volt:1,venom:1}; surge=0; chill=0;
   mons=[];projs=[];parts=[];floats=[];zaps=[];
-  score=0;hearts=3;wave=1;level=1;xp=0;xpNeed=25;tGame=0;spawnT=1.2;nextBoss=45;
-  combo=0;busy=false;swapping=null;paused=false;shake=0;hurtFlash=0;
-  fillBoard();
+  score=0;hp=100;wave=0;level=1;xp=0;xpNeed=25;waveDelay=0;
+  combo=0;busy=false;swapping=null;paused=false;shake=0;hurtFlash=0;pendSwapCell=null;
+  fillBoard(); spawnWave();
   state='play'; $t.classList.add('hidden'); $o.classList.add('hidden'); $lv.classList.add('hidden');
 }
 function endGame(){
@@ -379,67 +463,71 @@ function endGame(){
   document.getElementById('fwave').textContent='SURVIVED TO WAVE '+wave;
   $o.classList.remove('hidden');
 }
-function breach(m){
-  hearts-= m.boss?2:1; hurtFlash=1; addShake(10); sHurt();
-  float(monX(m),boardTop-14,'BREACH','#ff4d6d',20);
-  if(hearts<=0){ hearts=0; endGame(); }
-}
 
 // ---------- update ----------
 function update(dt){
-  tGame+=dt;
-  wave=1+Math.floor(tGame/16);
-  spawnT-=dt;
-  if(spawnT<=0){ spawnMon(false); spawnT=Math.max(0.7,2.6-0.14*wave); }
-  if(tGame>=nextBoss){ spawnMon(true); nextBoss+=45; }
   if(xp>=xpNeed){ xp-=xpNeed; level++; xpNeed=Math.round(xpNeed*1.35); offerCards(); }
 
-  // board state machine
+  // board
   if(busy){
     if(swapping){
       if(settleStep(dt)){
         if(swapping.ok){ swapping=null; resolveT=0.05; }
-        else if(swapping.phase===0){ // revert
+        else if(swapping.phase===0){
           const s=swapping; const a=grid[s.r1][s.c1],b=grid[s.r2][s.c2];
           grid[s.r1][s.c1]=b; grid[s.r2][s.c2]=a; s.phase=1; sBad();
         } else { swapping=null; busy=false; combo=0; }
       }
-    } else {
-      const settled=settleStep(dt);
-      if(settled){
-        resolveT-=dt;
-        if(resolveT<=0){
-          const runs=findRuns();
-          if(runs.length){ popRuns(runs); gravity(); resolveT=0.12; }
-          else { busy=false; combo=0; if(!movesExist()) shuffleBoard(); }
-        }
+    } else if(settleStep(dt)){
+      resolveT-=dt;
+      if(resolveT<=0){
+        const runs=findRuns();
+        if(runs.length){ popRuns(runs); gravity(); resolveT=0.12; }
+        else { busy=false; combo=0; if(!movesExist()) shuffleBoard(); }
       }
     }
-  } else if(swappingCheckIdleMatches()){ /* safety: cascade after transmute */ }
+  } else {
+    const runs=findRuns();
+    if(runs.length){ busy=true; resolveT=0.05; }
+  }
 
-  // projectiles
+  // projectiles home to the front target
   for(const p of projs){
     if(p.delay>0){ p.delay-=dt; continue; }
-    p.y+=p.vy*dt;
-    let hit=null;
-    for(const m of mons){ if(!m.dead&&inLane(m,p.lane)&&Math.abs(m.y-p.y)<monR(m)+8&&p.y>fieldTop-20){
-      if(!hit||m.y>hit.y) hit=m; } }
-    if(hit){ applyHit(p,hit);
-      const P=colors[p.cn]?colors[p.cn].props:{};
-      if(!P.pierce) p.dead=true; }
-    if(p.y<fieldTop-30) p.dead=true;
+    if(!p.target||p.target.dead){ p.target=frontMon(); }
+    if(!p.target){ p.dead=true; puff(p.x,p.y,3,colDef(p.cn)?colDef(p.cn).hex:'#fff',60); continue; }
+    const dx=p.target.x-p.x, dy=p.target.y-p.y, d=Math.hypot(dx,dy);
+    const sp=(H*1.3)*dt;
+    if(d<Math.max(10,p.target.r*0.8)||d<sp){ applyHit(p,p.target); p.dead=true; }
+    else { p.x+=dx/d*sp; p.y+=dy/d*sp; }
   }
   projs=projs.filter(p=>!p.dead);
 
   // monsters
+  let alive=0;
   for(const m of mons){
+    if(m.dead) continue; alive++;
     m.ph+=dt*2;
-    let sp=m.spd*(1-0.12*chill); if(m.slow>0){ sp*=0.5; m.slow-=dt; }
-    m.y+=sp*dt*(cell/60);
-    if(m.poison){ m.poison.t-=dt; hitMonSilent(m,m.poison.dps*dt); if(m.poison.t<=0)m.poison=null; }
-    if(!m.dead&&m.y+monR(m)>=boardTop-2){ m.dead=true; puff(monX(m),m.y,12,'#cfc3ad'); breach(m); }
+    if(!m.arrived){ m.y+=Math.min(m.ty-m.y, 140*dt); if(m.y>=m.ty-0.5){ m.y=m.ty; m.arrived=true; } continue; }
+    let rate=1-0.12*chill; if(m.slow>0){ rate*=0.5; m.slow-=dt; }
+    m.atkT-=dt*rate;
+    m.lunge=Math.max(0,m.lunge-dt*4);
+    if(m.atkT<=0){
+      m.atkT=m.atkMax*rnd(0.9,1.15); m.lunge=1;
+      hp-=m.dmg; hurtFlash=1; addShake(m.boss?12:6); sHurt();
+      float(W/2,boardTop-46,'-'+m.dmg,'#ff4d6d',18);
+      if(hp<=0){ hp=0; endGame(); return; }
+    }
+    if(m.poison){ m.poison.t-=dt; m.hp-=m.poison.dps*dt; checkDead(m); if(m.poison&&m.poison.t<=0)m.poison=null; }
   }
   mons=mons.filter(m=>!m.dead);
+  if(!alive&&state==='play'){
+    waveDelay-=dt;
+    if(waveDelay<=0){
+      if(wave>0){ score+=50*wave; hp=Math.min(100,hp+5); float(W/2,H/2-40,'WAVE CLEAR  +'+(50*wave),'#5ce8a4',20); }
+      spawnWave(); waveDelay=1.4;
+    }
+  } else waveDelay=1.4;
 
   for(const p of parts){ p.life-=dt; p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy+=500*dt; }
   parts=parts.filter(p=>p.life>0);
@@ -448,22 +536,8 @@ function update(dt){
   for(const z of zaps) z.life-=dt;
   zaps=zaps.filter(z=>z.life>0);
 }
-function hitMonSilent(m,dmg){ m.hp-=dmg;
-  if(m.hp<=0&&!m.dead){ m.dead=true; const pts=30+8*wave; score+=pts; xp+=4+wave;
-    float(monX(m),m.y,'+'+pts,'#5ce8a4',14); puff(monX(m),m.y,10,'#cfc3ad'); sKill(); } }
-function swappingCheckIdleMatches(){
-  const runs=findRuns();
-  if(runs.length){ busy=true; resolveT=0.05; return true; }
-  return false;
-}
 
 // ---------- draw ----------
-function drawShape(x,y,r,shape,fill,dark){
-  ctx.fillStyle=dark; shapePath(x,y+1.5,r,shape); ctx.fill();
-  ctx.fillStyle=fill; shapePath(x,y,r*0.94,shape); ctx.fill();
-  ctx.fillStyle='rgba(255,255,255,0.3)';
-  ctx.beginPath(); ctx.arc(x-r*0.3,y-r*0.33,r*0.18,0,7); ctx.fill();
-}
 function shapePath(x,y,r,s){
   ctx.beginPath();
   if(s==='circle') ctx.arc(x,y,r,0,7);
@@ -474,6 +548,23 @@ function shapePath(x,y,r,s){
       const px=x+Math.cos(a)*r, py=y+Math.sin(a)*r; i?ctx.lineTo(px,py):ctx.moveTo(px,py); } }
   ctx.closePath();
 }
+function drawGem(g){
+  const cd=colDef(g.cn); if(!cd) return;
+  const r=cell*0.36;
+  ctx.fillStyle=cd.dk; shapePath(g.px,g.py+1.5,r,cd.shape); ctx.fill();
+  ctx.fillStyle=cd.hex; shapePath(g.px,g.py,r*0.94,cd.shape); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.3)';
+  ctx.beginPath(); ctx.arc(g.px-r*0.3,g.py-r*0.33,r*0.18,0,7); ctx.fill();
+  if(g.pw){
+    const pulse=0.75+0.25*Math.sin(tReal*6);
+    ctx.strokeStyle='rgba(246,242,255,'+pulse+')'; ctx.lineWidth=2.5;
+    shapePath(g.px,g.py,r+3,cd.shape); ctx.stroke();
+    ctx.fillStyle='rgba(255,255,255,0.9)';
+    if(g.pw==='blast'){ // cross glyph
+      ctx.fillRect(g.px-1.5,g.py-r*0.55,3,r*1.1); ctx.fillRect(g.px-r*0.55,g.py-1.5,r*1.1,3);
+    } else { ctx.beginPath(); ctx.arc(g.px,g.py,r*0.22,0,7); ctx.fill(); }
+  }
+}
 function draw(){
   ctx.setTransform(DPR,0,0,DPR,0,0);
   if(shake>0.1){ ctx.translate(rnd(-shake,shake),rnd(-shake,shake)); shake*=0.86; } else shake=0;
@@ -482,63 +573,64 @@ function draw(){
   g.addColorStop(0,'#171226'); g.addColorStop(1,'#0c0913');
   ctx.fillStyle=g; ctx.fillRect(-20,-20,W+40,H+40);
   ctx.fillStyle='rgba(239,230,216,0.05)';
-  for(const s of specks) ctx.fillRect(s[0]*W,s[1]*(boardTop-20),2*s[2]+1,2*s[2]+1);
+  for(const s of specks) ctx.fillRect(s[0]*W,s[1]*(boardTop-30),2*s[2]+1,2*s[2]+1);
 
-  // lanes
-  ctx.strokeStyle='rgba(239,230,216,0.05)'; ctx.lineWidth=1;
-  for(let c=0;c<=CO;c++){ const x=boardX+c*cell;
-    ctx.beginPath(); ctx.moveTo(x,fieldTop-10); ctx.lineTo(x,boardTop); ctx.stroke(); }
-
-  // board frame = breach line
+  // board frame
   ctx.fillStyle='#2a2338'; ctx.fillRect(boardX-6,boardTop-6,cell*CO+12,cell*RO+12);
   ctx.fillStyle='#1c1729'; ctx.fillRect(boardX,boardTop,cell*CO,cell*RO);
-  ctx.strokeStyle='rgba(255,122,60,0.7)'; ctx.lineWidth=2; ctx.setLineDash([8,7]);
-  ctx.beginPath(); ctx.moveTo(boardX-6,boardTop-8); ctx.lineTo(boardX+cell*CO+6,boardTop-8); ctx.stroke();
-  ctx.setLineDash([]);
 
-  // gems (clip to board so refills don't draw over field)
+  // gems
   ctx.save(); ctx.beginPath(); ctx.rect(boardX,boardTop-cell,cell*CO,cell*(RO+1)); ctx.clip();
-  for(let r=0;r<RO;r++)for(let c=0;c<CO;c++){ const gm=grid[r]&&grid[r][c]; if(!gm)continue;
-    const col=colors[gm.cn]; if(!col)continue;
-    drawShape(gm.px,gm.py,cell*0.36,col.shape,col.hex,col.dk); }
+  for(let r=0;r<RO;r++)for(let c=0;c<CO;c++){ const gm=grid[r]&&grid[r][c]; if(gm) drawGem(gm); }
   ctx.restore();
 
   // monsters
+  const front=state==='play'?frontMon():null;
   for(const m of mons){
-    const x=monX(m),r=monR(m);
-    ctx.save(); ctx.translate(x,m.y);
+    const lung=m.lunge*10;
+    ctx.save(); ctx.translate(m.x,m.y+lung);
     const wob=Math.sin(m.ph*2)*0.05; ctx.scale(1+wob,1-wob);
-    ctx.fillStyle=m.boss?'#a99175':'#cfc3ad';
-    ctx.beginPath(); ctx.arc(0,0,r,0,7); ctx.fill();
+    const tele=m.arrived&&m.atkT<0.5;
+    if(tele) ctx.scale(1.12,1.12);
+    ctx.fillStyle=tele?'#e0a08a':(m.boss?'#a99175':'#cfc3ad');
+    ctx.beginPath(); ctx.arc(0,0,m.r,0,7); ctx.fill();
     ctx.fillStyle=m.boss?'#8a7358':'#b3a68c';
-    ctx.beginPath(); ctx.arc(0,r*0.35,r*0.6,0,7); ctx.fill();
-    ctx.fillStyle='#1a1420'; const e=r*0.28;
+    ctx.beginPath(); ctx.arc(0,m.r*0.35,m.r*0.6,0,7); ctx.fill();
+    ctx.fillStyle='#1a1420'; const e=m.r*0.28;
     ctx.beginPath(); ctx.arc(-e,-e*0.6,e*0.42,0,7); ctx.arc(e,-e*0.6,e*0.42,0,7); ctx.fill();
-    if(m.poison){ ctx.fillStyle='rgba(92,232,164,0.35)'; ctx.beginPath(); ctx.arc(0,0,r+3,0,7); ctx.fill(); }
+    if(m.poison){ ctx.fillStyle='rgba(92,232,164,0.3)'; ctx.beginPath(); ctx.arc(0,0,m.r+3,0,7); ctx.fill(); }
     if(m.slow>0){ ctx.strokeStyle='rgba(88,199,255,0.6)'; ctx.lineWidth=2;
-      ctx.beginPath(); ctx.arc(0,0,r+4,0,7); ctx.stroke(); }
+      ctx.beginPath(); ctx.arc(0,0,m.r+4,0,7); ctx.stroke(); }
+    // attack timer arc (ember, fills as strike approaches)
+    if(m.arrived){
+      const pr=1-Math.max(0,Math.min(1,m.atkT/m.atkMax));
+      ctx.strokeStyle=tele?'#ff4d6d':'rgba(255,122,60,0.8)'; ctx.lineWidth=3;
+      ctx.beginPath(); ctx.arc(0,0,m.r+7,-Math.PI/2,-Math.PI/2+6.283*pr); ctx.stroke();
+    }
+    // hp ring
     if(m.hp<m.maxhp){ ctx.strokeStyle='#ff4d6d'; ctx.lineWidth=3;
-      ctx.beginPath(); ctx.arc(0,0,r+6,-Math.PI/2,-Math.PI/2+6.283*Math.max(0,m.hp/m.maxhp)); ctx.stroke(); }
+      ctx.beginPath(); ctx.arc(0,0,m.r+11,-Math.PI/2,-Math.PI/2+6.283*Math.max(0,m.hp/m.maxhp)); ctx.stroke(); }
     ctx.restore();
+    if(m===front&&m.arrived){
+      ctx.fillStyle='#efe6d8';
+      const ty=m.y-m.r-20+Math.sin(tReal*5)*3;
+      ctx.beginPath(); ctx.moveTo(m.x,ty+8); ctx.lineTo(m.x-7,ty); ctx.lineTo(m.x+7,ty); ctx.closePath(); ctx.fill();
+    }
   }
 
   // projectiles
-  for(const p of projs){ if(p.delay>0)continue; const col=colors[p.cn]; if(!col)continue;
-    ctx.fillStyle=col.hex;
+  for(const p of projs){ if(p.delay>0)continue; const cd=colDef(p.cn); if(!cd)continue;
+    ctx.fillStyle=cd.hex;
     ctx.beginPath(); ctx.arc(p.x,p.y,5,0,7); ctx.fill();
-    ctx.globalAlpha=0.35; ctx.fillRect(p.x-2,p.y,4,26); ctx.globalAlpha=1; }
+    ctx.globalAlpha=0.3; ctx.beginPath(); ctx.arc(p.x,p.y,9,0,7); ctx.fill(); ctx.globalAlpha=1; }
 
-  // zaps
   for(const z of zaps){ ctx.strokeStyle='rgba(255,210,63,'+(z.life/0.18)+')'; ctx.lineWidth=2;
     ctx.beginPath(); ctx.moveTo(z.x1,z.y1);
-    const mx=(z.x1+z.x2)/2+rnd(-8,8), my=(z.y1+z.y2)/2+rnd(-8,8);
-    ctx.lineTo(mx,my); ctx.lineTo(z.x2,z.y2); ctx.stroke(); }
+    ctx.lineTo((z.x1+z.x2)/2+rnd(-8,8),(z.y1+z.y2)/2+rnd(-8,8)); ctx.lineTo(z.x2,z.y2); ctx.stroke(); }
 
-  // particles
   for(const p of parts){ const a=p.life/p.max; ctx.globalAlpha=a; ctx.fillStyle=p.col;
     ctx.beginPath(); ctx.arc(p.x,p.y,p.r*a+0.5,0,7); ctx.fill(); ctx.globalAlpha=1; }
 
-  // floats
   ctx.textAlign='center';
   for(const f of floats){ ctx.globalAlpha=Math.min(1,f.life*1.6); ctx.fillStyle=f.col;
     ctx.font='700 '+f.size+'px "Arial Narrow","Avenir Next Condensed",sans-serif';
@@ -546,18 +638,19 @@ function draw(){
 
   // HUD
   if(state!=='title'){
-    ctx.textAlign='left';
-    for(let i=0;i<3;i++){ ctx.fillStyle=i<hearts?'#ff4d6d':'rgba(239,230,216,0.15)';
-      ctx.font='18px sans-serif'; ctx.fillText('♥',10+i*22,26); }
-    ctx.fillStyle='#efe6d8'; ctx.textAlign='center';
+    // player hp bar above board
+    const bw=cell*CO, bx=boardX, by=boardTop-22;
+    ctx.fillStyle='rgba(239,230,216,0.12)'; ctx.fillRect(bx,by,bw,8);
+    ctx.fillStyle=hp>35?'#5ce8a4':'#ff4d6d'; ctx.fillRect(bx,by,bw*Math.max(0,hp/100),8);
+    ctx.fillStyle='#efe6d8'; ctx.textAlign='left';
+    ctx.font='700 12px "Arial Narrow",sans-serif'; ctx.fillText(Math.ceil(hp)+' HP',bx,by-5);
+    ctx.textAlign='center';
     ctx.font='700 18px "Arial Narrow","Avenir Next Condensed",sans-serif';
-    ctx.fillText(String(score),W/2,26);
+    ctx.fillStyle='#efe6d8'; ctx.fillText(String(score),W/2,26);
     ctx.fillStyle='rgba(239,230,216,0.45)'; ctx.font='11px "Arial Narrow",sans-serif';
     ctx.fillText('W A V E  '+wave,W/2,42);
-    // xp bar
     ctx.fillStyle='rgba(239,230,216,0.12)'; ctx.fillRect(W*0.2,50,W*0.6,4);
     ctx.fillStyle='#ff7a3c'; ctx.fillRect(W*0.2,50,W*0.6*Math.min(1,xp/xpNeed),4);
-    // build readout
     ctx.textAlign='right'; ctx.font='11px "Arial Narrow",sans-serif';
     let ty=24;
     for(const c of activeList()){ ctx.fillStyle=colors[c].hex;
