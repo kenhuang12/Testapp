@@ -1,4 +1,5 @@
 <title>Merge Pit — Playable Prototype</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <style>
   :root{
     --bg:#120e1a; --stone:#2a2338; --bone:#efe6d8; --ember:#ff7a3c;
@@ -50,6 +51,13 @@
 <script>
 (() => {
 'use strict';
+// Ensure a mobile viewport even if the host page's head lacks one —
+// without this, phones render at desktop width and everything shrinks.
+{
+  let m = document.querySelector('meta[name="viewport"]');
+  if(!m){ m = document.createElement('meta'); m.name = 'viewport'; document.head.appendChild(m); }
+  m.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
+}
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 const $title = document.getElementById('title'), $over = document.getElementById('over');
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -58,8 +66,11 @@ const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 let W=0, H=0, DPR=1, U=1, jarL=0, jarR=0, wallT=0, floorY=0, dangerY=0, dropY=0;
 function resize(){
   DPR = Math.min(devicePixelRatio||1, 2.5);
-  W = innerWidth; H = innerHeight;
+  const vv = window.visualViewport;
+  W = Math.round(vv ? vv.width : innerWidth);
+  H = Math.round(vv ? vv.height : innerHeight);
   cv.width = W*DPR; cv.height = H*DPR;
+  cv.style.width = W+'px'; cv.style.height = H+'px';
   const playW = Math.min(W-8, 470, H*0.64);
   U = playW/420;
   wallT = 10*U;
@@ -68,7 +79,10 @@ function resize(){
   dangerY = Math.max(120, H*0.185);
   dropY = dangerY - 44*U;
 }
-addEventListener('resize', resize); resize();
+addEventListener('resize', resize);
+addEventListener('orientationchange', () => setTimeout(resize, 250));
+if(window.visualViewport) visualViewport.addEventListener('resize', resize);
+resize(); setTimeout(resize, 100);
 
 // ---------- constants ----------
 const RAD  = [15,21,28,36,45,55,66];
