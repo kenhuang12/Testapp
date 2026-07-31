@@ -46,10 +46,10 @@
 <div id="title" class="overlay">
   <div class="eyebrow">Playable Prototype Nº3</div>
   <h1>Pit&nbsp;Fall</h1>
-  <div class="rules"><b>Left thumb: slide to move. Right thumb: drag to aim.</b>
-    Balls fire themselves — bank them off walls to heat them up, slip them
-    through the gaps, and <b>strike from above for bonus damage.</b>
-    Dodge the spit. Fuse maxed balls into monsters.</div>
+  <div class="rules"><b>One thumb: slide anywhere to move.</b> Your launcher aims
+    itself at the biggest threat — your job is positioning. Stand near walls for
+    bank shots, under gaps to slip balls through, and <b>dodge the spit.</b>
+    Fuse maxed balls into monsters.</div>
   <div class="cta">Tap to descend</div>
 </div>
 
@@ -157,7 +157,18 @@ function float(x,y,txt,col,size){ floats.push({x,y,txt,col,size:size||13,life:1}
 function addShake(v){ shake+=v*(reduceMotion?0.25:1); }
 
 // ---------- firing ----------
+function autoAim(){
+  // target the biggest threat: the enemy closest to the line (skip sealed Maw)
+  let t=null;
+  for(const m of mons){ if(m.dead) continue; if(m.boss&&!m.open) continue;
+    if(!t||m.y>t.y) t=m; }
+  if(t){ aimA=Math.atan2(t.y-(playerY-16), t.x-playerX);
+    if(aimA>-0.15) aimA=-0.15;
+    if(aimA<-Math.PI+0.15) aimA=-Math.PI+0.15;
+  } else aimA=-Math.PI/2;
+}
 function fireBall(){
+  autoAim();
   const slot=owned[rotIdx%owned.length]; rotIdx++;
   const d=defs[slot.key], count=1+Math.floor((slot.lvl-1)/2);
   const sp=(d.big?430:560)*U;
@@ -254,27 +265,20 @@ addEventListener('pointerdown',e=>{
   initAudio();
   if(state==='title'){ startGame(); return; }
   if(state==='over'){ if(tReal-overAt>0.6) startGame(); return; }
-  if(paused) return;
-  const role=e.clientX<W/2?'move':'aim';
-  // one stick per role at a time
-  for(const [id,p] of ptrs) if(p.role===role) ptrs.delete(id);
-  ptrs.set(e.pointerId,{role,ox:e.clientX,oy:e.clientY});
-  if(role==='move'){ stickUI.active=true; stickUI.ox=e.clientX; stickUI.oy=e.clientY; stickUI.kx=0; stickUI.ky=0; }
-  else aiming=true;
+  if(paused||ptrs.size) return;
+  ptrs.set(e.pointerId,{ox:e.clientX,oy:e.clientY});
+  stickUI.active=true; stickUI.ox=e.clientX; stickUI.oy=e.clientY; stickUI.kx=0; stickUI.ky=0;
 });
 addEventListener('pointermove',e=>{
   if(paused) return;
   const p=ptrs.get(e.pointerId); if(!p) return;
   const dx=e.clientX-p.ox, dy=e.clientY-p.oy;
-  if(p.role==='move'){
-    moveStick=Math.max(-1,Math.min(1,dx/56));
-    stickUI.kx=Math.max(-56,Math.min(56,dx)); stickUI.ky=Math.max(-24,Math.min(24,dy));
-  } else if(Math.hypot(dx,dy)>10) setAimDir(dx,dy);
+  moveStick=Math.max(-1,Math.min(1,dx/56));
+  stickUI.kx=Math.max(-56,Math.min(56,dx)); stickUI.ky=Math.max(-24,Math.min(24,dy));
 });
 const endPtr=e=>{
-  const p=ptrs.get(e.pointerId); if(!p) return;
-  if(p.role==='move'){ moveStick=0; stickUI.active=false; }
-  else aiming=false;
+  if(!ptrs.has(e.pointerId)) return;
+  moveStick=0; stickUI.active=false;
   ptrs.delete(e.pointerId);
 };
 addEventListener('pointerup',endPtr);
